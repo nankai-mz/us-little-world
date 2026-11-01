@@ -1,0 +1,121 @@
+{
+  "generatedAt": "2026-11-01T08:26:29.439Z",
+  "timezone": "Asia/Shanghai",
+  "version": "1.2.0",
+  "scope": "local-release-preparation",
+  "localBuildReady": true,
+  "configurationComplete": false,
+  "configuration": {
+    "appIdConfigured": false,
+    "cloudEnvironmentConfigured": false
+  },
+  "sdk": {
+    "version": "5.0.1-beta.1",
+    "prerelease": true,
+    "axiosOverride": "0.34.0"
+  },
+  "externalValidation": {
+    "cloud": "not_recorded",
+    "ios": "not_recorded",
+    "android": "not_recorded",
+    "ai": "not_recorded"
+  },
+  "checks": [
+    {
+      "name": "node",
+      "status": "pass",
+      "detail": "Node 24.13.0; root requirement >=22.12"
+    },
+    {
+      "name": "version",
+      "status": "pass",
+      "detail": "package 1.2.0; cloud 1.2.0"
+    },
+    {
+      "name": "client-permission-template",
+      "status": "pass",
+      "detail": "Template denies direct client access; actual cloud rules are not verified"
+    },
+    {
+      "name": "location-permissions",
+      "status": "pass",
+      "detail": "Only active chooseLocation is declared"
+    },
+    {
+      "name": "build:dist/index.html",
+      "status": "pass",
+      "detail": "Built after current source changes"
+    },
+    {
+      "name": "build:miniprogram/app.js",
+      "status": "pass",
+      "detail": "Built after current source changes"
+    },
+    {
+      "name": "build:miniprogram/generated/controller.js",
+      "status": "pass",
+      "detail": "Built after current source changes"
+    },
+    {
+      "name": "build:miniprogram/generated/platform.js",
+      "status": "pass",
+      "detail": "Built after current source changes"
+    },
+    {
+      "name": "build:cloudfunctions/usApi/index.js",
+      "status": "pass",
+      "detail": "Built after current source changes"
+    },
+    {
+      "name": "tests",
+      "status": "pass",
+      "detail": "64 passed across 7/7 files; full suite and current sources required"
+    },
+    {
+      "name": "mini-contract",
+      "status": "pass",
+      "detail": "6 routes; 78 conditional bindings; 1135097 bytes; source/Node VM only"
+    },
+    {
+      "name": "sdk-contract",
+      "status": "pass",
+      "detail": "Installed official SDK wrapper contract only; no cloud network test"
+    },
+    {
+      "name": "root-dependencies",
+      "status": "pass",
+      "detail": "0 advisories"
+    },
+    {
+      "name": "cloud-dependencies",
+      "status": "pass",
+      "detail": "0 advisories"
+    }
+  ],
+  "audit": {
+    "root": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    },
+    "cloud": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    }
+  },
+  "outputSha256": {
+    "dist/index.html": "1b256b11ce76b64399be51a6cd6bcbaa22b625a50d836741005c966c8ff96655",
+    "miniprogram/app.js": "ad0ffd75b7403e84903ed7e923ded247d842866cada3a69ff3c5b249fba8b855",
+    "miniprogram/generated/controller.js": "098fc8a6ebc4afb360f4d2376031b964336e403e81a16874b5742de4e4fdc193",
+    "miniprogram/generated/platform.js": "a3e46c42180d25c39ee08cccbaf3ac5cdde3f439a0d8fdc4fd4c1809bea1b3aa",
+    "cloudfunctions/usApi/index.js": "de7bbe9a94a9bf241232c845636ae8e518eadca6901a25bd9a8c79864cb65765"
+  },
+  "nextStep": "Obtain AppID and CloudBase environment ID, then run npm run configure; no cloud resources have been created"
+}

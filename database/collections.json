@@ -1,0 +1,19 @@
+{
+  "mode": "CloudBase document database (classic)",
+  "collections": [
+    "users",
+    "spaces",
+    "devices",
+    "invitations",
+    "key_envelopes",
+    "encrypted_records",
+    "encrypted_files",
+    "ai_limits"
+  ],
+  "indexes": [
+    { "collection": "devices", "fields": ["spaceId", "status", "_id"] },
+    { "collection": "key_envelopes", "fields": ["spaceId", "toDevice", "_id"] },
+    { "collection": "encrypted_records", "fields": ["spaceId", "_id"] }
+  ],
+  "note": "Collection/index checklist, not a CloudBase CLI deployment manifest. See docs/DEPLOYMENT.md."
+}

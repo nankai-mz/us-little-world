@@ -1,0 +1,64 @@
+{
+  "pages": [
+    "pages/home/index",
+    "pages/memories/index",
+    "pages/interaction/index",
+    "pages/plans/index",
+    "pages/profile/index",
+    "pages/workspace/index"
+  ],
+  "window": {
+    "navigationBarTitleText": "Us · 我们的小世界",
+    "navigationBarBackgroundColor": "#f8f6f0",
+    "navigationBarTextStyle": "black",
+    "backgroundColor": "#f8f6f0",
+    "backgroundTextStyle": "dark"
+  },
+  "tabBar": {
+    "color": "#aba292",
+    "selectedColor": "#b48376",
+    "backgroundColor": "#fffdf7",
+    "borderStyle": "white",
+    "list": [
+      {
+        "pagePath": "pages/home/index",
+        "text": "首页",
+        "iconPath": "assets/tab-home.png",
+        "selectedIconPath": "assets/tab-home-selected.png"
+      },
+      {
+        "pagePath": "pages/memories/index",
+        "text": "时光",
+        "iconPath": "assets/tab-journal.png",
+        "selectedIconPath": "assets/tab-journal-selected.png"
+      },
+      {
+        "pagePath": "pages/interaction/index",
+        "text": "互动",
+        "iconPath": "assets/tab-play.png",
+        "selectedIconPath": "assets/tab-play-selected.png"
+      },
+      {
+        "pagePath": "pages/plans/index",
+        "text": "计划",
+        "iconPath": "assets/tab-calendar.png",
+        "selectedIconPath": "assets/tab-calendar-selected.png"
+      },
+      {
+        "pagePath": "pages/profile/index",
+        "text": "我的",
+        "iconPath": "assets/tab-profile.png",
+        "selectedIconPath": "assets/tab-profile-selected.png"
+      }
+    ]
+  },
+  "permission": {
+    "scope.userLocation": {
+      "desc": "仅在你主动选择共同足迹地点时使用，不进行后台定位"
+    }
+  },
+  "requiredPrivateInfos": ["chooseLocation"],
+  "style": "v2",
+  "lazyCodeLoading": "requiredComponents",
+  "sitemapLocation": "sitemap.json"
+}

@@ -1,0 +1,1301 @@
+<template name="screen">
+  <view class="page {{reduceMotion ? 'reduced-motion' : ''}}">
+    <view
+      wx:if="{{effectText}}"
+      class="interaction-feedback feedback-{{effectType}}"
+      aria-live="polite"
+      >{{effectText}}</view
+    >
+    <view wx:if="{{!ready}}" class="auth">
+      <view class="logo">us<text>✳</text></view
+      ><view class="eyebrow">A PRIVATE LITTLE PLACE FOR TWO</view
+      ><view class="auth-title">把日子过成<view>我们喜欢的样子。</view></view
+      ><text class="subtitle">收藏平凡的瞬间，也期待未来的每一天。</text>
+      <image class="auth-pet" src="/assets/pet-room.png" mode="aspectFit" />
+      <view wx:if="{{!configured}}" class="notice"
+        >开发准备：请在 config.ts 填写 CloudBase 环境 ID，在项目设置填写真实微信
+        AppID，并部署 usApi 云函数。本机浏览器预览可先体验功能。</view
+      >
+      <view wx:if="{{authMode === 'welcome'}}" class="auth-actions"
+        ><button class="primary" data-mode="create" bindtap="authMode">
+          微信身份 · 创建双人空间</button
+        ><button class="secondary" data-mode="join" bindtap="authMode">
+          我有邀请码，加入对方</button
+        ><button class="text-button" data-mode="recover" bindtap="authMode">
+          已有备份？恢复我们的回忆
+        </button></view
+      >
+      <view wx:else class="card auth-card"
+        ><view class="section-title"
+          >{{authMode === 'unlock' ? '欢迎回到我们的小世界' : authMode ===
+          'create' ? '故事，从今天开始' : authMode === 'join' ?
+          '走进对方的小世界' : '恢复我们的回忆'}}</view
+        >
+        <block wx:if="{{authMode === 'create'}}"
+          ><text class="label">给空间起个名字</text
+          ><input
+            value="{{title}}"
+            data-field="title"
+            bindinput="input"
+            maxlength="30"
+          /><text class="label">恋爱开始日期</text
+          ><picker
+            mode="date"
+            value="{{startDate}}"
+            end="{{day}}"
+            data-field="startDate"
+            bindchange="input"
+            ><view class="picker">{{startDate}}</view></picker
+          ></block
+        >
+        <block wx:if="{{authMode === 'join'}}"
+          ><text class="label">一次性邀请码</text
+          ><input
+            value="{{invite}}"
+            data-field="invite"
+            bindinput="input"
+            placeholder="请向对方索取邀请码"
+            maxlength="128"
+        /></block>
+        <block wx:if="{{authMode === 'recover'}}"
+          ><text class="label">64 位恢复密钥</text
+          ><textarea
+            value="{{code}}"
+            data-field="code"
+            bindinput="input"
+            maxlength="80"
+            placeholder="恢复密钥只在本机处理"
+          />
+        </block>
+        <text class="label"
+          >{{authMode === 'recover' ? '设置新的' : '本机'}}解锁口令（至少 10
+          位）</text
+        ><input
+          password
+          value="{{password}}"
+          data-field="password"
+          bindinput="input"
+          placeholder="口令不会发送到服务器"
+          maxlength="200"
+        />
+        <button
+          wx:if="{{authMode !== 'recover'}}"
+          class="primary full"
+          loading="{{busy}}"
+          disabled="{{busy || !configured}}"
+          bindtap="authenticate"
+        >
+          {{authMode === 'unlock' ? '打开小世界' : '安全地开始'}}</button
+        ><button
+          wx:else
+          class="primary full"
+          bindtap="restoreVault"
+          loading="{{busy}}"
+        >
+          选择加密备份并恢复</button
+        ><button class="text-button" data-mode="welcome" bindtap="authMode">
+          返回
+        </button>
+        <button
+          wx:if="{{authMode === 'unlock'}}"
+          class="text-button"
+          data-mode="recover"
+          bindtap="authMode"
+        >
+          使用恢复密钥与备份
+        </button>
+      </view>
+      <text class="fineprint"
+        >继续即了解：仅你的微信身份用于访问控制，内容在设备上加密。密钥丢失后服务器无法恢复。请保存加密备份和恢复密钥。</text
+      >
+    </view>
+    <block wx:else>
+      <view class="error" wx:if="{{error}}">{{error}}</view
+      ><view class="notice" wx:if="{{unreadable}}"
+        >有 {{unreadable}} 条记录暂时无法解密，请检查密钥备份。</view
+      ><view class="notice" wx:if="{{!hasSharedKey}}"
+        >等待安全交换空间密钥。<text data-view="security" bindtap="navigate"
+          >前往设备与安全 →</text
+        ></view
+      >
+      <block wx:if="{{screen === 'home'}}"
+        ><view class="eyebrow">LIFE IS BETTER WITH YOU</view
+        ><view class="heading">把今天，写进我们的故事<text>✳</text></view
+        ><text class="subtitle">平凡日子里的小小幸福，都值得好好收藏。</text>
+        <view class="hero"
+          ><image
+            class="hero-flower"
+            src="/assets/flower.png"
+            mode="aspectFit"
+          /><text class="eyebrow">♡ TWO OF US</text
+          ><view class="avatars"
+            ><view class="avatar">我</view><text>♡</text
+            ><view class="avatar green">你</view></view
+          ><text class="hero-label">不知不觉，我们已经一起走过</text
+          ><view class="number">{{together}}<text>天</text></view
+          ><text class="fineprint">从 {{startDate}} 开始，每天多一点喜欢。</text
+          ><button
+            class="relationship-settings"
+            data-view="editor"
+            data-kind="relationship"
+            data-id="{{relationshipId}}"
+            bindtap="navigate"
+          >
+            设置恋爱开始日期 ›</button
+          ><view class="hero-footer"
+            >故事还在继续<text>and counting…</text></view
+          ></view
+        >
+        <view class="card mood-card"
+          ><view class="section-title"
+            >今日小心情<text>只展示主动分享的心情</text></view
+          ><view class="mood-row"
+            ><text>我</text><text class="bubble">{{myMood}}</text></view
+          ><view class="mood-row"
+            ><text>你</text
+            ><text class="bubble lavender">{{partnerMood}}</text></view
+          ><scroll-view scroll-x class="mood-options"
+            ><text
+              wx:for="{{moods}}"
+              wx:key="*this"
+              data-mood="{{item}}"
+              bindtap="mood"
+              >{{item}}</text
+            ></scroll-view
+          ></view
+        >
+        <view class="quick-grid"
+          ><view data-view="editor" data-kind="memory" bindtap="navigate"
+            ><text class="quick-symbol">✎</text><text>写一篇日记</text
+            ><text class="tiny">留住今天的小美好</text></view
+          ><view data-view="editor" data-kind="capsule" bindtap="navigate"
+            ><text class="quick-symbol">✉</text><text>给未来的信</text
+            ><text class="tiny">寄一份温柔的期待</text></view
+          ><view bindtap="randomMemory"
+            ><text class="quick-symbol">✧</text><text>随机一段回忆</text
+            ><text class="tiny">重逢过去的某一天</text></view
+          ><view data-view="pet" bindtap="navigate"
+            ><text class="quick-symbol">♡</text><text>去糯米的小屋</text
+            ><text class="tiny">毛茸茸的陪伴</text></view
+          ></view
+        >
+        <view class="section-title section-gap"
+          >最近的温柔时光<text data-page="memories" bindtap="navigate"
+            >翻翻全部 →</text
+          ></view
+        ><view
+          wx:for="{{recent}}"
+          wx:key="id"
+          class="card memory-card"
+          data-view="detail"
+          data-id="{{item.id}}"
+          bindtap="navigate"
+          ><image
+            wx:if="{{item.coverPhotoUrl}}"
+            src="{{item.coverPhotoUrl}}"
+            class="memory-image"
+            mode="aspectFill"
+          /><view class="memory-content"
+            ><view class="meta">{{item.data.date}} · 共同回忆</view
+            ><view class="card-title">{{item.data.title}}</view
+            ><view class="body-preview">{{item.data.body}}</view></view
+          ></view
+        ><view
+          wx:if="{{!recent.length}}"
+          class="empty"
+          data-view="editor"
+          bindtap="navigate"
+          >空白的一页，也有无限可能。<view>写下第一条回忆 →</view></view
+        >
+        <view class="daily" data-view="question" bindtap="navigate"
+          ><text class="eyebrow">A QUESTION FOR TODAY</text
+          ><view>{{question}}</view><text>留下我的答案 →</text></view
+        >
+      </block>
+      <block wx:if="{{page === 'memories'}}"
+        ><view class="eyebrow">LITTLE MOMENTS, FOREVER MEMORIES</view
+        ><view class="heading">时光慢慢，回忆满满<text>✳</text></view
+        ><scroll-view scroll-x class="tabs"
+          ><text
+            class="{{screen === 'timeline' ? 'selected' : ''}}"
+            data-view="timeline"
+            bindtap="section"
+            >时间轴</text
+          ><text
+            class="{{screen === 'album' ? 'selected' : ''}}"
+            data-view="album"
+            bindtap="section"
+            >相册</text
+          ><text
+            class="{{screen === 'capsules' ? 'selected' : ''}}"
+            data-view="capsules"
+            bindtap="section"
+            >时光胶囊</text
+          ><text
+            class="{{screen === 'map' ? 'selected' : ''}}"
+            data-view="map"
+            bindtap="section"
+            >足迹</text
+          ><text
+            class="{{screen === 'report' ? 'selected' : ''}}"
+            data-view="report"
+            bindtap="section"
+            >报告</text
+          ><text
+            class="{{screen === 'ai' ? 'selected' : ''}}"
+            data-view="ai"
+            bindtap="section"
+            >AI 助手</text
+          ></scroll-view
+        ></block
+      >
+      <block wx:if="{{screen === 'timeline' || screen === 'album'}}"
+        ><view class="filters"
+          ><text
+            data-filter="全部"
+            bindtap="filter"
+            class="{{filter === '全部' ? 'selected' : ''}}"
+            >全部</text
+          ><text
+            data-filter="共同回忆"
+            bindtap="filter"
+            class="{{filter === '共同回忆' ? 'selected' : ''}}"
+            >共同</text
+          ><text
+            data-filter="私人日记"
+            bindtap="filter"
+            class="{{filter === '私人日记' ? 'selected' : ''}}"
+            >私人</text
+          ><text
+            data-filter="收藏"
+            bindtap="filter"
+            class="{{filter === '收藏' ? 'selected' : ''}}"
+            >收藏</text
+          ></view
+        ><input
+          class="search"
+          value="{{search}}"
+          data-field="search"
+          bindinput="input"
+          placeholder="在回忆里找一找：文字、日期、标签"
+        />
+        <button
+          class="primary full"
+          data-view="editor"
+          data-kind="memory"
+          bindtap="navigate"
+        >
+          ＋ 收藏今天的小事</button
+        ><view wx:for="{{memories}}" wx:key="id" class="card memory-card"
+          ><view data-view="detail" data-id="{{item.id}}" bindtap="navigate"
+            ><image
+              wx:if="{{item.coverPhotoUrl}}"
+              src="{{item.coverPhotoUrl}}"
+              class="memory-image"
+              mode="aspectFill"
+            /><view class="memory-content"
+              ><view class="meta"
+                >{{item.data.date}} · {{item.visibility === 'private' ?
+                '仅自己可见' : '共同回忆'}}</view
+              ><view class="card-title">{{item.data.title}}</view
+              ><view wx:if="{{screen !== 'album'}}" class="body-preview"
+                >{{item.data.body}}</view
+              ><view class="tags"
+                ><text wx:for="{{item.data.tags}}" wx:key="*this"
+                  ># {{item}}</text
+                ></view
+              ></view
+            ></view
+          ><view class="card-footer"
+            ><text data-id="{{item.id}}" bindtap="favorite">♡ 收藏 / 取消</text
+            ><text
+              data-view="editor"
+              data-kind="memory"
+              data-id="{{item.id}}"
+              bindtap="navigate"
+              >再添一笔 →</text
+            ></view
+          ></view
+        ><view wx:if="{{!memories.length}}" class="empty"
+          >还没有这一类回忆，先记下一条吧。</view
+        ></block
+      >
+      <block wx:if="{{screen === 'editor'}}"
+        ><view class="eyebrow">A LITTLE SOMETHING FOR US</view
+        ><view class="heading"
+          >{{form.category === 'relationship' ? '设置恋爱开始日期' :
+          '记下这份温柔'}}<text>✳</text></view
+        ><view class="card editor"
+          ><block wx:if="{{form.category !== 'relationship'}}"
+            ><text class="label">这一页的小标题</text
+            ><input
+              data-field="title"
+              bindinput="formInput"
+              value="{{form.title}}"
+              placeholder="今天，有什么值得记住？"
+              maxlength="80" /></block
+          ><text class="label"
+            >{{form.category === 'relationship' ? '恋爱开始日期' : form.kind ===
+            'anniversary' ? '纪念日日期' : '记录日期'}}</text
+          ><picker
+            wx:if="{{form.category === 'relationship'}}"
+            mode="date"
+            end="{{day}}"
+            value="{{form.date}}"
+            data-field="date"
+            bindchange="formInput"
+            ><view class="picker">{{form.date}}</view></picker
+          ><picker
+            wx:else
+            mode="date"
+            value="{{form.date}}"
+            data-field="date"
+            bindchange="formInput"
+            ><view class="picker">{{form.date}}</view></picker
+          ><text wx:if="{{form.category === 'relationship'}}" class="fineprint"
+            >恋爱开始当天记为第 1
+            天。保存后，首页天数和恋爱纪念日倒计时都会自动更新。</text
+          ><block wx:else
+            ><text class="label">慢慢写，不用着急</text
+            ><textarea
+              data-field="body"
+              bindinput="formInput"
+              value="{{form.body}}"
+              placeholder="或许只是一起喝了一杯咖啡，也很值得。"
+              maxlength="12000"
+              auto-height
+            />
+          </block>
+          <block wx:if="{{form.kind === 'memory'}}"
+            ><text class="label">小标签（用逗号分开）</text
+            ><input
+              data-field="tagsText"
+              bindinput="input"
+              value="{{tagsText}}"
+              placeholder="日常，约会，小幸福"
+            /><view class="switch-row"
+              ><text>只有我自己可以看见</text
+              ><switch
+                checked="{{visibility === 'private'}}"
+                disabled="{{busy || editing || form.photos.length > 0}}"
+                color="#b48376"
+                bindchange="visibility" /></view
+            ><button
+              class="secondary full"
+              bindtap="addPhoto"
+              disabled="{{busy || form.photos.length >= 6}}"
+            >
+              ＋ 添加照片 · 已选 {{form.photos.length || 0}} 张</button
+            ><view class="editor-photos"
+              ><view wx:for="{{editorPhotos}}" wx:key="id" class="editor-photo"
+                ><image
+                  wx:if="{{item.url}}"
+                  src="{{item.url}}"
+                  mode="aspectFill"
+                  data-photo="{{item.id}}"
+                  bindtap="previewPhoto"
+                /><view wx:else class="photo-placeholder">照片暂时无法预览</view
+                ><button
+                  class="photo-remove"
+                  data-photo="{{item.id}}"
+                  bindtap="removePhoto"
+                  disabled="{{busy}}"
+                  aria-label="移除照片"
+                >
+                  ×
+                </button></view
+              ></view
+            ><text wx:if="{{photoStatus}}" class="fineprint"
+              >{{photoStatus}}</text
+            ><text class="fineprint"
+              >较大照片会自动缩小至 500 KB 以内，最多 6
+              张；上传前在本机加密。</text
+            ></block
+          >
+          <block wx:if="{{form.kind === 'capsule'}}"
+            ><text class="label">约定开启的日子</text
+            ><picker
+              mode="date"
+              start="{{day}}"
+              value="{{form.unlockDate}}"
+              data-field="unlockDate"
+              bindchange="formInput"
+              ><view class="picker">{{form.unlockDate}}</view></picker
+            ><view class="switch-row"
+              ><text>到期后，还需要双方确认</text
+              ><switch
+                checked="{{form.needsBoth}}"
+                data-field="needsBoth"
+                bindchange="formToggle"
+                color="#b48376" /></view
+            ><text class="fineprint"
+              >日期开启是一份应用内的约定，并非密码学时间锁。</text
+            ></block
+          >
+          <block wx:if="{{form.kind === 'place'}}"
+            ><text class="label">城市 / 地点分类</text
+            ><input
+              value="{{form.city}}"
+              data-field="city"
+              bindinput="formInput"
+              placeholder="文字地点也很好" /><input
+              value="{{form.category}}"
+              data-field="category"
+              bindinput="formInput"
+              placeholder="城市 / 旅行 / 餐厅 / 特别纪念" /><button
+              class="secondary full"
+              bindtap="chooseLocation"
+            >
+              主动在地图上选点（可选）</button
+            ><text class="fineprint"
+              >不会后台定位。仅在你主动选点时调用地图服务。</text
+            ><text class="label">纬度 / 经度（可不填）</text
+            ><input
+              type="digit"
+              value="{{form.latitude}}"
+              data-field="latitude"
+              bindinput="formInput" /><input
+              type="digit"
+              value="{{form.longitude}}"
+              data-field="longitude"
+              bindinput="formInput"
+          /></block>
+          <block wx:if="{{form.kind === 'wish'}}"
+            ><text class="label">期待程度</text
+            ><input
+              value="{{form.priority}}"
+              data-field="priority"
+              bindinput="formInput"
+              placeholder="小小期待 / 很想实现 / 慢慢来" /></block
+          ><block
+            wx:if="{{form.kind === 'anniversary' &amp;&amp; form.category !== 'relationship'}}"
+            ><view class="switch-row"
+              ><text>每一年，都想记住</text
+              ><switch
+                checked="{{form.yearly}}"
+                data-field="yearly"
+                bindchange="formToggle"
+                color="#b48376" /></view></block
+          ><block wx:if="{{form.kind === 'date'}}"
+            ><text class="label">约会地点</text
+            ><input
+              value="{{form.location}}"
+              data-field="location"
+              bindinput="formInput" /><text class="label">大概预算（元）</text
+            ><input
+              type="digit"
+              value="{{form.budget}}"
+              data-field="budget"
+              bindinput="formInput"
+          /></block>
+          <button
+            class="primary full"
+            bindtap="save"
+            loading="{{busy}}"
+            disabled="{{busy}}"
+          >
+            {{form.category === 'relationship' ? '保存恋爱开始日期' : form.kind
+            === 'capsule' ? '封存这份期待' : '收藏到我们的小世界'}}</button
+          ><text wx:if="{{form.category !== 'relationship'}}" class="fineprint"
+            >日记草稿自动在本机加密保存。</text
+          ></view
+        ></block
+      >
+      <block wx:if="{{screen === 'detail' &amp;&amp; detail}}"
+        ><view class="eyebrow">A MOMENT TO REMEMBER</view
+        ><view class="heading">{{detail.data.title}}</view
+        ><text class="subtitle"
+          >{{detail.data.date}} · {{detail.visibility === 'private' ?
+          '只有自己可见' : '共同回忆'}}</text
+        ><view class="card"
+          ><block wx:for="{{detail.photos}}" wx:key="id"
+            ><image
+              wx:if="{{item.url}}"
+              src="{{item.url}}"
+              class="detail-image"
+              mode="widthFix"
+              data-photo="{{item.id}}"
+              bindtap="previewPhoto" /></block
+          ><text class="detail-body" selectable>{{detail.data.body}}</text
+          ><view class="tags"
+            ><text wx:for="{{detail.data.tags}}" wx:key="*this"
+              ># {{item}}</text
+            ></view
+          ><view wx:if="{{history.length}}" class="edit-history"
+            ><view class="section-title">编辑历史 · 最近十次</view
+            ><view wx:for="{{history}}" wx:key="at"
+              ><text class="meta">{{item.time}}</text><view>{{item.title}}</view
+              ><text class="subtitle">{{item.body}}</text></view
+            ></view
+          ><view class="card-footer"
+            ><text
+              data-view="editor"
+              data-kind="{{detail.data.kind}}"
+              data-id="{{detail.id}}"
+              bindtap="navigate"
+              >编辑这一页</text
+            ><text data-id="{{detail.id}}" bindtap="trash"
+              >移入回收站</text
+            ></view
+          ></view
+        ><view class="card"
+          ><view class="section-title">给这一页留句话</view
+          ><view class="comment" wx:for="{{comments}}" wx:key="id"
+            ><text>{{item.creatorId === userId ? '我' : '对方'}}</text
+            >{{item.data.body}}</view
+          ><input
+            data-field="comment"
+            bindinput="input"
+            value="{{comment}}"
+            placeholder="想说点什么…"
+            maxlength="500"
+          /><button
+            class="secondary full"
+            bindtap="comment"
+            disabled="{{busy}}"
+          >
+            加密保存留言
+          </button></view
+        ></block
+      >
+      <block wx:if="{{screen === 'capsules'}}"
+        ><view class="feature capsule-feature"
+          ><text>✉</text><view>把现在，寄给未来的我们</view
+          ><text class="subtitle">有些话，等到特别的日子再慢慢读。</text></view
+        ><button
+          class="primary full"
+          data-view="editor"
+          data-kind="capsule"
+          bindtap="navigate"
+        >
+          ＋ 封存一份期待</button
+        ><view wx:for="{{capsules}}" wx:key="id" class="card capsule"
+          ><text class="eyebrow">TIME CAPSULE</text
+          ><view class="card-title">{{item.data.title}}</view
+          ><text class="subtitle">约定在 {{item.data.unlockDate}} 开启</text
+          ><view class="capsule-days"
+            >{{item.data.openedAt ? '已经开启' : item.remaining > 0 ? '还有 ' +
+            item.remaining + ' 天' : '到了约定的日子'}}</view
+          ><button
+            wx:if="{{item.data.needsBoth &amp;&amp; !item.confirmed}}"
+            class="secondary"
+            data-id="{{item.id}}"
+            data-action="confirm"
+            bindtap="capsuleAction"
+          >
+            我准备好了</button
+          ><button
+            class="text-button"
+            data-id="{{item.id}}"
+            data-action="open"
+            bindtap="capsuleAction"
+          >
+            {{item.data.openedAt ? '重读这封信' : '开启胶囊'}} →</button
+          ><text class="tiny" data-id="{{item.id}}" bindtap="trash"
+            >移入回收站</text
+          ></view
+        ><text class="fineprint"
+          >日期开启由应用控制；拥有密钥的人理论上可以自行解密。</text
+        ></block
+      >
+      <block wx:if="{{screen === 'map'}}"
+        ><view class="feature map-feature"
+          ><text>⌖</text><view>世界很大，想和你慢慢走</view
+          ><text class="subtitle">只记录我们主动留下的足迹。</text></view
+        ><button
+          class="primary full"
+          data-view="editor"
+          data-kind="place"
+          bindtap="navigate"
+        >
+          ＋ 留下新足迹</button
+        ><view class="card" wx:for="{{places}}" wx:key="id"
+          ><view class="meta">{{item.data.city}} · {{item.data.date}}</view
+          ><view class="card-title">{{item.data.title}}</view
+          ><text class="subtitle">{{item.data.body}}</text
+          ><view class="card-footer"
+            ><text data-id="{{item.id}}" bindtap="map">打开坐标地图</text
+            ><text
+              data-view="editor"
+              data-kind="place"
+              data-id="{{item.id}}"
+              bindtap="navigate"
+              >编辑足迹</text
+            ></view
+          ></view
+        ><text class="fineprint"
+          >文字地点无需坐标。打开地图前会单独征求你的同意。</text
+        ></block
+      >
+      <block wx:if="{{screen === 'report'}}"
+        ><view class="report-cover"
+          ><text class="eyebrow">OUR DAYS, BEAUTIFULLY COLLECTED</text
+          ><view>我们的{{reportMode === 'year' ? '这一年' : '这个月'}}</view
+          ><text class="subtitle">原来，我们已经攒了这么多美好。</text
+          ><view class="filters"
+            ><text
+              data-mode="month"
+              bindtap="reportMode"
+              class="{{reportMode === 'month' ? 'selected' : ''}}"
+              >月度</text
+            ><text
+              data-mode="year"
+              bindtap="reportMode"
+              class="{{reportMode === 'year' ? 'selected' : ''}}"
+              >年度</text
+            ></view
+          ></view
+        ><view class="stats"
+          ><view><text>{{stats.memories}}</text>条共同回忆</view
+          ><view><text>{{stats.photos}}</text>张珍藏照片</view
+          ><view><text>{{stats.places}}</text>处共同足迹</view
+          ><view><text>{{stats.wishes}}</text>个已实现愿望</view
+          ><view><text>{{stats.pet}}</text>次陪伴小伙伴</view
+          ><view><text>{{stats.games}}</text>次双人问答</view></view
+        ><button class="primary full" bindtap="exportReport">
+          保存报告数据</button
+        ><text class="fineprint"
+          >统计只在本机进行。浏览器预览同时支持打印 / 保存
+          PDF；小程序当前导出报告 JSON。</text
+        ></block
+      >
+      <block wx:if="{{screen === 'ai'}}"
+        ><view class="feature"
+          ><text>✧</text><view>把回忆，连成一段故事</view
+          ><text class="subtitle">私人日记和照片原图不会发送。</text></view
+        ><checkbox-group bindchange="aiSelect"
+          ><label class="card check-card" wx:for="{{aiMemories}}" wx:key="id"
+            ><checkbox
+              value="{{item.id}}"
+              checked="{{item.selected}}"
+              color="#b48376"
+            /><view
+              ><view class="card-title">{{item.data.title}}</view
+              ><text class="subtitle">{{item.data.date}}</text></view
+            ></label
+          ></checkbox-group
+        ><button
+          class="secondary full"
+          disabled="{{!aiSelected.length}}"
+          bindtap="aiPreview"
+        >
+          预览本次发送的文字</button
+        ><view wx:if="{{aiPreview}}" class="card"
+          ><text class="detail-body" selectable>{{aiText}}</text
+          ><view class="switch-row"
+            ><text>同意将以上文字发送给 AI 服务，仅授权本次</text
+            ><switch
+              checked="{{aiConsent}}"
+              data-field="aiConsent"
+              bindchange="toggle"
+              color="#b48376" /></view
+          ><button
+            class="primary full"
+            disabled="{{!aiConsent || busy}}"
+            bindtap="aiGenerate"
+            loading="{{busy}}"
+          >
+            确认并生成
+          </button></view
+        ><view class="card" wx:if="{{result}}"
+          ><text class="label">审核、修改后再保存</text
+          ><textarea
+            value="{{result}}"
+            data-field="result"
+            bindinput="input"
+            auto-height
+            maxlength="20000"
+          /><button class="secondary full" bindtap="aiSave">
+            确认保存为加密回忆
+          </button></view
+        ><text class="fineprint"
+          >AI
+          服务需配置云端环境变量。授权只在本次请求有效，服务不会把请求正文写入业务数据库。</text
+        ></block
+      >
+      <block wx:if="{{page === 'interaction'}}"
+        ><view class="eyebrow">A LITTLE JOY FOR TWO</view
+        ><view class="heading">一起，玩一会儿<text>✳</text></view
+        ><scroll-view scroll-x class="tabs"
+          ><text
+            class="{{screen === 'games' ? 'selected' : ''}}"
+            data-view="games"
+            bindtap="section"
+            >一起玩耍</text
+          ><text data-view="pet" bindtap="section">糯米的小屋</text
+          ><text data-view="question" bindtap="section">每日问答</text
+          ><text data-view="quiz" bindtap="section">默契小问答</text
+          ><text data-view="roulette" bindtap="section"
+            >约会转盘</text
+          ></scroll-view
+        ></block
+      >
+      <block wx:if="{{screen === 'questionBank'}}"
+        ><view class="eyebrow">A LITTLE LIBRARY OF US</view
+        ><view class="heading">话题小书架</view
+        ><text class="subtitle">120 个温柔话题，想聊哪一个，就挑哪一个。</text
+        ><scroll-view scroll-x class="tabs"
+          ><text
+            wx:for="{{questionCategories}}"
+            wx:key="*this"
+            class="{{questionCategory === item ? 'selected' : ''}}"
+            data-category="{{item}}"
+            bindtap="questionCategory"
+            >{{item}}</text
+          ></scroll-view
+        ><button
+          class="primary full"
+          data-view="customQuestion"
+          bindtap="section"
+        >
+          ＋ 写一个自己的问题</button
+        ><view wx:for="{{questionBank}}" wx:key="id" class="card topic-card"
+          ><text class="meta">{{item.category}}</text
+          ><view class="card-title">{{item.text}}</view
+          ><button
+            class="text-button"
+            data-id="{{item.id}}"
+            bindtap="chooseQuestion"
+            disabled="{{busy}}"
+          >
+            问问对方 →
+          </button></view
+        ></block
+      >
+      <block wx:if="{{screen === 'customQuestion'}}"
+        ><view class="heading">有件小事，想问问你</view
+        ><view class="card"
+          ><text class="subtitle"
+            >自愿回答，也可以慢慢想。问题和答案都会加密保存。</text
+          ><textarea
+            value="{{customQuestion}}"
+            data-field="customQuestion"
+            bindinput="input"
+            maxlength="180"
+            placeholder="如果周末只留一件想一起做的小事，你会选什么？"
+            auto-height
+          /><button
+            class="primary full"
+            bindtap="askCustomQuestion"
+            disabled="{{busy || !customQuestion}}"
+          >
+            把问题留给我们
+          </button></view
+        ></block
+      >
+      <block wx:if="{{screen === 'questions'}}"
+        ><view class="heading">我们还想慢慢聊的事</view
+        ><button
+          class="primary full"
+          data-view="questionBank"
+          bindtap="section"
+        >
+          去话题小书架</button
+        ><view
+          wx:for="{{questionHistory}}"
+          wx:key="id"
+          class="card topic-card"
+          data-id="{{item.id}}"
+          bindtap="openQuestion"
+          ><text class="meta"
+            >{{item.data.date}} · {{item.data.category || (item.data.kind ===
+            'quiz' ? '默契小测试' : '双人问答')}}</text
+          ><view class="card-title">{{item.data.title}}</view
+          ><text class="subtitle"
+            >{{item.answerCount === 2 ? '双方都已留下答案' : item.answerCount
+            === 1 ? '等彼此都准备好' : '这个问题，慢慢回答也好'}} →</text
+          ></view
+        ><view wx:if="{{!questionHistory.length}}" class="empty"
+          >第一句好奇，等我们一起留下。</view
+        ></block
+      >
+      <block wx:if="{{screen === 'games'}}"
+        ><view class="pet-preview card" data-view="pet" bindtap="navigate"
+          ><image src="/assets/pet-room.png" mode="aspectFit" /><view
+            class="card-title"
+            >{{pet.name}}的小屋</view
+          ><text class="subtitle"
+            >没有打卡，没有惩罚。想陪它的时候就来。</text
+          ></view
+        ><view class="quick-grid"
+          ><view data-view="question" bindtap="navigate"
+            ><text class="quick-symbol">☕</text><text>今日的小话题</text
+            ><text class="tiny">慢慢了解彼此</text></view
+          ><view data-view="quiz" bindtap="navigate"
+            ><text class="quick-symbol">✧</text><text>原来你也这样想</text
+            ><text class="tiny">异步双人问答</text></view
+          ><view data-view="roulette" bindtap="navigate"
+            ><text class="quick-symbol">◎</text><text>今天约点什么</text
+            ><text class="tiny">交给一点小惊喜</text></view
+          ><view data-view="truth" bindtap="navigate"
+            ><text class="quick-symbol">✉</text><text>慢慢靠近一点点</text
+            ><text class="tiny">随时可以跳过</text></view
+          ></view
+        ><view class="card"
+          ><view class="section-title">还有好多，想慢慢了解</view
+          ><button
+            class="secondary full"
+            data-view="questionBank"
+            bindtap="navigate"
+          >
+            120 个话题 · 按分类挑一题</button
+          ><button
+            class="text-button"
+            data-view="customQuestion"
+            bindtap="navigate"
+          >
+            ＋ 问一个自己的问题</button
+          ><button class="text-button" data-view="questions" bindtap="navigate">
+            回看我们的问题 →
+          </button></view
+        ></block
+      >
+      <block wx:if="{{screen === 'pet'}}"
+        ><view class="pet-room {{effectType ? 'pet-bounce' : ''}}"
+          ><view class="eyebrow">OUR COZY LITTLE ROOM</view
+          ><view class="heading">{{pet.name}}的小屋</view
+          ><image src="/assets/pet-room.png" mode="aspectFit" /><text
+            class="pet-level"
+            >Lv.{{petLevel}} · {{pet.exp}} 点共同回忆</text
+          ></view
+        ><view class="card"
+          ><view class="section-title">今天，怎么陪陪它？</view
+          ><view class="pet-stat"
+            >🥕 吃饱饱<view class="pet-meter"
+              ><view style="width: {{pet.hunger}}%;" /></view
+            ><text>{{pet.hunger}} / 100</text></view
+          ><view class="pet-stat"
+            >♡ 心情<view class="pet-meter rose"
+              ><view style="width: {{pet.mood}}%;" /></view
+            ><text>{{pet.mood}} / 100</text></view
+          ><view class="pet-stat"
+            >☾ 精力<view class="pet-meter lavender"
+              ><view style="width: {{pet.energy}}%;" /></view
+            ><text>{{pet.energy}} / 100</text></view
+          ><view class="quick-grid pet-actions"
+            ><button data-action="feed" bindtap="petAction" disabled="{{busy}}">
+              🥕 喂点好吃的</button
+            ><button data-action="pat" bindtap="petAction" disabled="{{busy}}">
+              ☁ 摸摸小脑袋</button
+            ><button data-action="play" bindtap="petAction" disabled="{{busy}}">
+              ✧ 陪它玩一会</button
+            ><button
+              data-action="sleep"
+              bindtap="petAction"
+              disabled="{{busy}}"
+            >
+              ☾ 睡个好觉
+            </button></view
+          ><text class="label">给小伙伴起个名字</text
+          ><input
+            data-field="petName"
+            bindinput="input"
+            placeholder="{{pet.name}}"
+            maxlength="12"
+          /><button class="secondary full" bindtap="renamePet">保存名字</button
+          ><text class="label">一起布置小屋</text
+          ><view class="filters"
+            ><text data-decoration="plant" bindtap="decoration">窗边绿植</text
+            ><text data-decoration="flower" bindtap="decoration">一束小花</text
+            ><text data-decoration="blanket" bindtap="decoration"
+              >软软毯子</text
+            ></view
+          ><text class="fineprint"
+            >装饰收藏：{{pet.decorations}} · 不来照顾也不会扣分。</text
+          ></view
+        ></block
+      >
+      <block
+        wx:if="{{screen === 'question' || screen === 'quiz' || screen === 'truth'}}"
+        ><view class="question-card card"
+          ><text class="eyebrow">LET'S KNOW EACH OTHER A LITTLE MORE</text
+          ><view class="question-mark">☕</view
+          ><text class="meta">{{questionDate}}</text
+          ><view class="question-title">{{question}}</view
+          ><text class="subtitle">各自写下答案，不着急，等彼此都准备好。</text
+          ><view wx:if="{{screen === 'quiz'}}"
+            ><scroll-view scroll-x class="tabs"
+              ><text
+                wx:for="{{quizCategories}}"
+                wx:key="*this"
+                class="{{quizCategory === item ? 'selected' : ''}}"
+                data-category="{{item}}"
+                bindtap="quizCategory"
+                >{{item}}</text
+              ></scroll-view
+            ><picker
+              range="{{quizBank}}"
+              range-key="title"
+              data-field="quizSelection"
+              bindchange="quizPicker"
+              ><view class="picker">换一道默契题 · 24 题可选 ›</view></picker
+            ></view
+          ><view wx:else class="question-links"
+            ><text data-view="questionBank" bindtap="section"
+              >从小书架挑一题 ›</text
+            ><text data-view="questions" bindtap="section"
+              >回看我们的问题 ›</text
+            ></view
+          ><view wx:if="{{screen === 'quiz'}}" class="quiz-options"
+            ><view
+              wx:for="{{quizOptions}}"
+              wx:key="*this"
+              data-option="{{item}}"
+              bindtap="option"
+              class="{{answer === item ? 'selected' : ''}}"
+              >{{item}}</view
+            ></view
+          ><textarea
+            wx:else
+            value="{{answer}}"
+            data-field="answer"
+            bindinput="input"
+            placeholder="这一刻，我想说…"
+            maxlength="1000"
+            auto-height
+          /><button
+            class="primary full"
+            bindtap="answer"
+            disabled="{{!answer || busy}}"
+          >
+            留下我的答案</button
+          ><button
+            wx:if="{{screen === 'truth'}}"
+            class="text-button"
+            bindtap="skipQuestion"
+          >
+            跳过，换一个话题</button
+          ><view wx:if="{{answerRows.length}}" class="answers"
+            ><view class="section-title"
+              >{{answerCount === 2 ? '原来，我们是这样想的' :
+              '已保存，等待对方也准备好'}}</view
+            ><view wx:for="{{answerRows}}" wx:key="user"
+              ><text>{{item.user}}</text>{{item.answer}}</view
+            ></view
+          ><text class="fineprint"
+            >没有感情评分。答案揭晓由客户端控制，不是密码学盲答。</text
+          ></view
+        ></block
+      >
+      <block wx:if="{{screen === 'roulette'}}"
+        ><view class="question-card card"
+          ><text class="eyebrow">LEAVE IT TO A LITTLE SURPRISE</text
+          ><view class="question-title">下一场约会，就这么决定</view
+          ><view
+            class="wheel {{spinning ? 'is-spinning' : ''}}"
+            style="transform: rotate({{wheelRotation}}deg);"
+            ><view style="transform: rotate({{-wheelRotation}}deg);"
+              >♡<text>和你一起</text></view
+            ></view
+          ><button
+            class="primary full"
+            bindtap="spin"
+            disabled="{{busy || spinning}}"
+          >
+            {{spinning ? '小惊喜正在转过来…' : '转一转，出发！'}}</button
+          ><view wx:if="{{result}}" class="roulette-result">✧ {{result}}</view
+          ><text class="label">把想做的小事放进去（每行一项）</text
+          ><textarea
+            value="{{rouletteOptions}}"
+            disabled="{{busy || spinning}}"
+            data-field="rouletteOptions"
+            bindinput="input"
+            auto-height
+            maxlength="2000"
+          /><text class="fineprint">每一项机会相同，至少填写两项。</text></view
+        ></block
+      >
+      <block wx:if="{{page === 'plans'}}"
+        ><view class="eyebrow">GOOD THINGS ARE ON THEIR WAY</view
+        ><view class="heading">未来，有好多想一起做的事<text>✳</text></view
+        ><view class="tabs"
+          ><text
+            class="{{screen === 'wishes' ? 'selected' : ''}}"
+            data-view="wishes"
+            bindtap="section"
+            >愿望清单</text
+          ><text
+            class="{{screen === 'anniversaries' ? 'selected' : ''}}"
+            data-view="anniversaries"
+            bindtap="section"
+            >特别的日子</text
+          ><text
+            class="{{screen === 'dates' ? 'selected' : ''}}"
+            data-view="dates"
+            bindtap="section"
+            >约会计划</text
+          ></view
+        ></block
+      >
+      <block wx:if="{{screen === 'wishes'}}"
+        ><button
+          class="primary full"
+          data-view="editor"
+          data-kind="wish"
+          bindtap="navigate"
+        >
+          ＋ 添加一份期待</button
+        ><view wx:for="{{wishes}}" wx:key="id" class="card"
+          ><text class="eyebrow">ONE LITTLE WISH AT A TIME</text
+          ><view class="card-title">{{item.data.title}}</view
+          ><text class="subtitle">{{item.data.body}}</text
+          ><text class="priority"
+            >{{item.data.completedAt ? '已经实现 · ' + item.data.completedAt :
+            item.data.priority || '小小期待'}}</text
+          ><view class="card-footer"
+            ><text
+              data-id="{{item.id}}"
+              data-action="confirm"
+              bindtap="wishAction"
+              >♡ 我也想</text
+            ><text
+              data-id="{{item.id}}"
+              data-action="complete"
+              bindtap="wishAction"
+              >{{item.data.completedAt ? '放回期待清单' : '标记实现'}} ✓</text
+            ><text
+              data-view="editor"
+              data-kind="wish"
+              data-id="{{item.id}}"
+              bindtap="navigate"
+              >编辑</text
+            ></view
+          ></view
+        ></block
+      >
+      <block wx:if="{{screen === 'anniversaries'}}"
+        ><button
+          class="primary full"
+          data-view="editor"
+          data-kind="anniversary"
+          bindtap="navigate"
+        >
+          ＋ 记住特别的小日子</button
+        ><view
+          class="card"
+          wx:for="{{events}}"
+          wx:key="id"
+          data-view="editor"
+          data-kind="anniversary"
+          data-id="{{item.id}}"
+          bindtap="navigate"
+          ><view class="card-title"
+            >{{item.data.category === 'relationship' ? '恋爱纪念日' :
+            item.data.title}}</view
+          ><text class="subtitle"
+            >{{item.data.category === 'relationship' ? '恋爱开始日期 · ' :
+            ''}}{{item.data.date}}</text
+          ><view class="anniversary-days"
+            >{{item.countdown}}<text>天后</text></view
+          ><view
+            wx:if="{{item.data.category === 'relationship'}}"
+            class="card-footer"
+            ><text>修改恋爱开始日期 →</text></view
+          ></view
+        ><text class="fineprint"
+          >目前展示日历倒计时；微信订阅提醒需配置模板与定时任务。</text
+        ></block
+      >
+      <block wx:if="{{screen === 'dates'}}"
+        ><button
+          class="primary full"
+          data-view="editor"
+          data-kind="date"
+          bindtap="navigate"
+        >
+          ＋ 安排一场小约会</button
+        ><view
+          class="card"
+          wx:for="{{dates}}"
+          wx:key="id"
+          data-view="editor"
+          data-kind="date"
+          data-id="{{item.id}}"
+          bindtap="navigate"
+          ><text class="eyebrow">A LITTLE DATE WITH YOU</text
+          ><view class="card-title">{{item.data.title}}</view
+          ><view class="subtitle"
+            >{{item.data.date}} · {{item.data.location || '地点慢慢商量'}}</view
+          ><view class="subtitle"
+            >预算 ¥{{item.data.budget || '—'}} · {{item.data.body}}</view
+          ></view
+        ></block
+      >
+      <block wx:if="{{screen === 'profile'}}"
+        ><view class="profile-hero"
+          ><view class="avatar">我</view
+          ><view class="heading">给自己，留一处温柔角落</view
+          ><text class="subtitle"
+            >这里不记录在线状态，也不追踪实时位置。</text
+          ></view
+        ><view class="card settings"
+          ><view data-view="connection" bindtap="navigate"
+            >连接与同步<text>查看连接状态与最近刷新时间 →</text></view
+          ><view data-view="security" bindtap="navigate"
+            >设备与安全<text>安全码、授权与密钥交换 →</text></view
+          ><view data-view="backup" bindtap="navigate"
+            >备份与恢复<text>给回忆留一把备用钥匙 →</text></view
+          ><view data-view="capsules" bindtap="navigate"
+            >写给未来的信<text>交给时间的温柔 →</text></view
+          ><view bindtap="exportRecords"
+            >导出我的记录<text>明确确认后导出明文 →</text></view
+          ><view data-view="trash" bindtap="navigate"
+            >回收站<text>暂时收起的回忆 →</text></view
+          ><view data-view="privacy" bindtap="navigate"
+            >隐私与空间设置<text>分享多少，由我们决定 →</text></view
+          ></view
+        ><view class="card switch-row"
+          ><view
+            >减少动态效果<view class="fineprint"
+              >减少旋转与跳动，保留操作反馈</view
+            ></view
+          ><switch
+            checked="{{reduceMotion}}"
+            color="#9b5f55"
+            bindchange="motionPreference" /></view
+        ><button class="secondary full" bindtap="lock">
+          锁上我的小世界
+        </button></block
+      >
+      <block wx:if="{{screen === 'connection'}}"
+        ><view class="heading">连接与同步</view
+        ><view class="card"
+          ><view class="section-title"
+            >{{connectionChecked ? connectionTitle : '查看当前连接状态'}}</view
+          ><text class="subtitle">仅检查连接，不发送日记正文或照片。</text
+          ><view class="connection-line"
+            >最近成功刷新<text>{{lastSynced}}</text></view
+          ><view class="connection-line"
+            >可查看的记录<text>{{entries.length}} 条</text></view
+          ><text wx:if="{{syncError}}" class="error">{{syncError}}</text
+          ><button
+            class="secondary full"
+            bindtap="checkConnection"
+            disabled="{{busy}}"
+          >
+            检查连接</button
+          ><button class="primary full" bindtap="syncNow" disabled="{{busy}}">
+            取得最新记录</button
+          ><text class="fineprint"
+            >网络中断时不会自动重发保存、删除或 AI
+            生成操作。结果不确定时，请先联网刷新。</text
+          ></view
+        ></block
+      >
+      <block wx:if="{{screen === 'security'}}"
+        ><view class="heading">我们之间的安全感</view
+        ><view class="card"
+          ><view class="section-title">我的设备安全码</view
+          ><text class="security-code" selectable>{{fingerprint}}</text
+          ><text class="fineprint"
+            >请双方通过当面或可信渠道核对。服务端不持有内容解密密钥。</text
+          ><text class="label">在此输入已核对的「对方设备」安全码</text
+          ><textarea
+            value="{{code}}"
+            data-field="code"
+            bindinput="input"
+            maxlength="60"
+          /><button class="secondary full" bindtap="receiveKey">
+            验证来源并接收空间密钥
+          </button></view
+        ><view class="card"
+          ><view class="section-title">当前授权设备</view
+          ><view class="device" wx:for="{{devices}}" wx:key="id"
+            ><view
+              >{{item.label}}{{item.id === currentDevice ? ' · 当前设备' :
+              ''}}</view
+            ><text selectable class="tiny">{{item.fingerprint}}</text
+            ><button
+              wx:if="{{item.id !== currentDevice &amp;&amp; hasSharedKey}}"
+              class="text-button"
+              data-id="{{item.id}}"
+              bindtap="sendKey"
+            >
+              核对安全码后，发送加密空间密钥 →</button
+            ><button
+              wx:if="{{item.userId === userId &amp;&amp; item.id !== currentDevice}}"
+              class="text-button"
+              data-id="{{item.id}}"
+              bindtap="revokeDevice"
+            >
+              撤销这台设备
+            </button></view
+          ></view
+        ><button
+          wx:if="{{spaceMembers &lt; 2}}"
+          class="primary full"
+          bindtap="createInvite"
+        >
+          生成一次性邀请码 · 一小时有效</button
+        ><view class="security-code" wx:if="{{invite}}" selectable
+          >{{invite}}</view
+        ><button wx:if="{{invite}}" class="secondary full" bindtap="copyInvite">
+          复制邀请码</button
+        ><button class="secondary full" bindtap="rotateKey">
+          轮换未来记录密钥</button
+        ><text class="fineprint"
+          >密钥交换完成后，请重新导出备份。撤销设备不能撤回此前已解密的内容；请在撤销设备后轮换未来记录密钥。</text
+        ></block
+      >
+      <block wx:if="{{screen === 'backup'}}"
+        ><view class="heading">给回忆，留一把备用钥匙</view
+        ><view class="card"
+          ><text class="subtitle"
+            >请分开离线保管「加密密钥备份」和「恢复密钥」。恢复仍需要原微信账号与可访问的云空间。</text
+          ><button class="primary full" bindtap="backup">
+            导出加密密钥备份</button
+          ><text wx:if="{{recoveryKey}}" class="security-code" selectable
+            >{{recoveryKey}}</text
+          ><text class="fineprint"
+            >备份包含密钥库密文；照片与日记仍在云端。如需明文记录，请从「我的」单独导出。</text
+          ></view
+        ></block
+      >
+      <block wx:if="{{screen === 'trash'}}"
+        ><view class="heading">暂时收起的回忆</view
+        ><view class="card" wx:for="{{trash}}" wx:key="id"
+          ><view class="card-title">{{item.data.title}}</view
+          ><button
+            class="text-button"
+            data-id="{{item.id}}"
+            bindtap="restoreEntry"
+          >
+            让这份回忆回来 →</button
+          ><button
+            wx:if="{{item.creatorId === userId}}"
+            class="text-button"
+            data-id="{{item.id}}"
+            bindtap="purgeEntry"
+          >
+            永久删除
+          </button></view
+        ><view class="empty" wx:if="{{!trash.length}}"
+          >没有暂时收起的回忆。</view
+        ></block
+      >
+      <block wx:if="{{screen === 'privacy'}}"
+        ><view class="heading">分享多少，由我们决定</view
+        ><view class="card privacy"
+          ><view class="section-title">内容与密钥</view
+          ><text
+            >文字、图片、精确坐标和宠物状态在本机加密。个人日记使用个人密钥，服务器只保存密文与必要元数据。解锁口令不上传。</text
+          ><view class="section-title">自愿分享</view
+          ><text
+            >没有后台位置采集、在线监控或强制打卡。地图服务在你主动调用时会处理所选位置。AI
+            仅在选择、预览和一次性确认后接收文本，服务商保留政策取决于所配置服务。</text
+          ><view class="section-title">本机文件与备份</view
+          ><text
+            >照片解密后临时保存于微信应用目录，隐藏、退出页面和锁定时清理。请妥善保管设备、解锁口令与离线备份。</text
+          ><view class="section-title">退出空间</view
+          ><text
+            >关闭空间会停止双方云访问，不自动删除另一方的私人内容。请先导出需要的备份；当前版本不能重新开启关闭的空间。</text
+          ><button class="danger full" bindtap="closeSpace">
+            解除绑定 / 关闭空间
+          </button></view
+        ></block
+      >
+      <view class="footer">一点日常，一点喜欢。<text>MADE FOR US ♡</text></view>
+    </block>
+    <view class="error" wx:if="{{error &amp;&amp; !ready}}">{{error}}</view>
+  </view>
+</template>

@@ -1,0 +1,18 @@
+{
+  "description": "Us · 我们的小世界",
+  "appid": "touristappid",
+  "projectname": "us-little-world",
+  "compileType": "miniprogram",
+  "miniprogramRoot": "miniprogram/",
+  "cloudfunctionRoot": "cloudfunctions/",
+  "libVersion": "3.10.3",
+  "setting": {
+    "es6": true,
+    "enhance": true,
+    "minified": true,
+    "postcss": true,
+    "urlCheck": true
+  },
+  "packOptions": { "ignore": [{ "type": "suffix", "value": ".ts" }] },
+  "condition": {}
+}

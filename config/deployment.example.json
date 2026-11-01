@@ -1,0 +1,5 @@
+{
+  "appid": "请填写真实微信小程序AppID",
+  "cloudEnv": "请填写真实CloudBase环境ID",
+  "cloudFunction": "usApi"
+}

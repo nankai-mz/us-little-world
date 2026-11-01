@@ -1,0 +1,2 @@
+<import src="../../templates/screen.wxml"/>
+<template is="screen" data="{{...viewModel}}"/>

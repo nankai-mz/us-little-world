@@ -1,0 +1,46 @@
+{
+  "name": "us-little-world",
+  "version": "1.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Us · 我们的小世界 — 微信双人私密小程序",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1 --port 5173",
+    "build": "npm run typecheck && vite build && npm run build:mini && npm run build:cloud",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --reporter=default --reporter=json --outputFile=artifacts/tests-report.json",
+    "build:mini": "node scripts/build-mini.mjs",
+    "build:cloud": "node scripts/build-cloud.mjs",
+    "check:mini": "node scripts/check-mini.mjs",
+    "check:sdk": "node scripts/check-cloud-sdk.mjs",
+    "preflight": "node scripts/preflight.mjs",
+    "configure": "node scripts/configure.mjs",
+    "release": "npm test && npm run build && npm run check:mini && npm run check:sdk && npm run preflight && pwsh -File scripts/package.ps1",
+    "preview": "vite preview --host 127.0.0.1 --port 5173"
+  },
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "dependencies": {
+    "@noble/ciphers": "2.4.0",
+    "@noble/curves": "2.4.0",
+    "@noble/hashes": "2.4.0",
+    "@scure/base": "2.0.0",
+    "fast-text-encoding": "1.0.6",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "@vitejs/plugin-react": "^4.3.4",
+    "esbuild": "^0.25.0",
+    "miniprogram-api-typings": "^4.0.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vitest": "5.0.5"
+  }
+}
