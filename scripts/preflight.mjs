@@ -110,7 +110,7 @@ async function main() {
     configuredDevEnv,
     devCloudEnv
       ? "Separate development environment configured"
-      : "Empty; develop/trial falls back to production",
+      : "Empty; develop/trial uses the shared-environment usApiTest function",
   );
   const outputs = [
     "dist/index.html",
@@ -119,6 +119,9 @@ async function main() {
     "miniprogram/generated/controller.js",
     "miniprogram/generated/platform.js",
     "cloudfunctions/usApi/index.js",
+    "cloudfunctions/usApiTest/index.js",
+    "cloudfunctions/usApiTest/package.json",
+    "cloudfunctions/usApiTest/package-lock.json",
   ];
   try {
     const index = await readFile(join(root, "dist/index.html"), "utf8");
@@ -172,6 +175,7 @@ async function main() {
     "src",
     "web",
     "miniprogram/config.ts",
+    "miniprogram/cloud.ts",
     "miniprogram/controller.ts",
     "miniprogram/platform.ts",
     "miniprogram/app.ts",

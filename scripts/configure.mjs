@@ -38,6 +38,8 @@ export function validatePublicConfig(value) {
     !/^[A-Za-z][A-Za-z0-9_-]{0,59}$/.test(cloudFunction)
   )
     throw new Error("云函数名称格式不正确");
+  if (cloudFunction === "usApiTest")
+    throw new Error("usApiTest 专用于共用环境内的测试空间");
   return {
     appid: value.appid,
     cloudEnv: value.cloudEnv,

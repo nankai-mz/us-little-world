@@ -26,6 +26,15 @@ npm run configure -- --file config/deployment.local.json
 
 `npm run preflight` 检查版本、构建与测试证据、离线 SDK 检查、依赖审计和权限模板。报告将 `localBuildReady` 与 `configurationComplete` 分开：本地准备可在配置缺失时通过；`npm run preflight -- --require-cloud-config` 额外检查配置是否填写（缺失时退出码 2）。配置齐全只证明格式正确，不证明账号可访问环境。
 
+## 共用云环境的测试空间
+
+当前项目保留现有 `cloudEnv`。正式版调用 `usApi`，开发版和体验版在 `devCloudEnv` 为空时调用 `usApiTest`。无法识别微信版本时也走测试入口。旧开发包仍可能调用 `usApi`，应重新编译或上传新版体验包后再创建测试数据。
+
+1. 运行 `npm run build:cloud`，将生成的 `cloudfunctions/usApiTest` 部署到现有环境。使用 Node.js 20.19、入口 `index.main`，按同一份锁文件安装依赖。仅更新测试函数即可联调。
+2. 按 `database/collections.json` 新建同名 `test_` 前缀集合与索引。每个测试集合拒绝普通客户端读写。原集合、索引和云存储规则保持原有设置。测试照片写入 `test/encrypted/`，应用不直接访问云存储。
+3. 测试账号在微信运行环境调用 `usApiTest` 的 `testIdentity`，将返回的 `fingerprint` 交给项目管理员。管理员仅在该函数的环境变量 `US_TEST_OPENID_SHA256` 配置受信任的账号指纹，用英文逗号分隔。指纹无需写入代码、客户端配置或 Git。白名单为空时所有业务调用均被拒绝。
+4. 测试入口禁用外部 AI 调用和维护定时任务。两套数据共享云环境额度。开发版与体验版共用测试密钥库，正式版沿用原有本机密钥库。
+
 ## 开发/生产双环境（可选）
 
 如果同一个微信账号既要开发测试空间、又要保留正式空间，需要把两种版本指向两个不同的 CloudBase 环境。同一个微信 OPENID 在两个环境各有一份 `users` 记录，因此可以各有一个空间；同一个环境内仍限制一个活跃空间。
@@ -38,7 +47,7 @@ npm run configure -- --file config/deployment.local.json
    ```
 
    也可以把 `devCloudEnv` 写进 `config/deployment.local.json` 后用 `--file`。不要填入任何密钥。
-3. 客户端按运行版本自动选择环境：`release` 使用 `cloudEnv`，`develop` / `trial` 使用 `devCloudEnv`；`devCloudEnv` 为空时回落到正式环境。选择逻辑在 `src/core/env.ts`，不要在页面里硬编码环境 ID。
+3. 客户端按运行版本自动选择环境：`release` 使用 `cloudEnv`，`develop` / `trial` 使用 `devCloudEnv`。两端均调用各自环境中的 `usApi`。选择逻辑在 `src/core/env.ts`。
 4. 测试环境需要单独完成与正式环境相同的部署：9 个集合、索引、拒绝客户端访问的规则、私有存储规则、`usApi` 云函数；需要 AI 和维护定时器时也分别配置。
 5. 开发版/体验版用测试环境创建测试空间，正式版用正式环境创建正式空间。不要用开发版写入正式环境数据。
 

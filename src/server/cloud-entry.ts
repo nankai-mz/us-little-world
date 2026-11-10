@@ -8,9 +8,19 @@ import sdkPackage from "../../cloudfunctions/usApi/package.json";
 // SDK is external to the bundle and installed by WeChat DevTools in the cloud.
 // @ts-expect-error wx-server-sdk is a cloud-only dependency
 import cloud from "wx-server-sdk";
+declare const US_SHARED_TEST: boolean;
+const testBuild = typeof US_SHARED_TEST !== "undefined" && US_SHARED_TEST;
 cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database({ throwOnNotFound: false });
-const repo = cloudRepository(db);
+const repo = cloudRepository(db, testBuild ? "test_" : "");
+const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+function checkFileScope(id: string) {
+  if (
+    testBuild &&
+    !/^cloud:\/\/[^/]+\/test\/encrypted\/[a-f0-9]{32}\/[a-f0-9]{32}\.enc$/.test(id)
+  )
+    throw new Error("File is outside the test scope");
+}
 const serverDeps = {
   runtime: {
     mode: "cloud",
@@ -19,17 +29,20 @@ const serverDeps = {
   repo,
   now: Date.now,
   id: () => randomBytes(16).toString("hex"),
-  hash: (text: string) => createHash("sha256").update(text).digest("hex"),
+  hash,
   filePut: async (path: string, data: string) =>
     (
       await cloud.uploadFile({
-        cloudPath: path,
+        cloudPath: testBuild ? `test/${path}` : path,
         fileContent: Buffer.from(data, "utf8"),
       })
     ).fileID,
-  fileGet: async (id: string) =>
-    (await cloud.downloadFile({ fileID: id })).fileContent.toString("utf8"),
+  fileGet: async (id: string) => {
+    checkFileScope(id);
+    return (await cloud.downloadFile({ fileID: id })).fileContent.toString("utf8");
+  },
   fileDelete: async (id: string) => {
+    checkFileScope(id);
     const result = await cloud.deleteFile({ fileList: [id] });
     if (
       !Array.isArray(result.fileList) ||
@@ -38,7 +51,7 @@ const serverDeps = {
       throw new Error("Encrypted file deletion failed");
   },
   ai:
-    process.env.AI_BASE_URL && process.env.AI_API_KEY && process.env.AI_MODEL
+    !testBuild && process.env.AI_BASE_URL && process.env.AI_API_KEY && process.env.AI_MODEL
       ? async (text: string, task: string) => {
           const base = process.env.AI_BASE_URL!.replace(/\/$/, "");
           if (!base.startsWith("https://"))
@@ -78,8 +91,22 @@ const serverDeps = {
 const handler = createApi(serverDeps);
 export async function main(event: any) {
   const { OPENID } = cloud.getWXContext();
+  if (testBuild) {
+    const fingerprint = OPENID ? hash(OPENID) : "";
+    // A signed-in caller can obtain only their own digest for administrator enrollment.
+    if (fingerprint && event?.action === "testIdentity")
+      return { success: true, data: { fingerprint } };
+    const allowed = (process.env.US_TEST_OPENID_SHA256 || "")
+      .split(",")
+      .map((value) => value.trim());
+    if (!fingerprint || !allowed.includes(fingerprint) || isMaintenanceEvent(event))
+      return {
+        success: false,
+        error: { code: "TEST_ACCESS_DENIED", message: "此微信账号尚未开通测试空间" },
+      };
+  }
   // Temporary release probe: authenticated, fixed missing ID, no content returned.
-  if (OPENID && event?.action === "health" && event?.data?.sdkProbe === true) {
+  if (!testBuild && OPENID && event?.action === "health" && event?.data?.sdkProbe === true) {
     async function probe(read: () => Promise<any>) {
       try {
         const result = await read();

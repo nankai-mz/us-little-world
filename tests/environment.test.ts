@@ -1,21 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { selectCloudEnv } from "../src/core/env";
+import { selectCloudTarget } from "../src/core/env";
 import type { Attachment, Entry, Secrets } from "../src/core/types";
 
 describe("开发/生产云环境选择", () => {
-  it("正式版始终使用正式环境", () => {
-    expect(selectCloudEnv("prod-env", "dev-env", "release")).toBe("prod-env");
-    expect(selectCloudEnv("prod-env", "", "release")).toBe("prod-env");
+  it("正式版始终走正式入口并沿用本机旧密钥库", () => {
+    expect(selectCloudTarget("prod-env", "dev-env", "usApi", "release")).toEqual({
+      env: "prod-env", functionName: "usApi", localScope: "",
+    });
   });
-  it("开发版和体验版使用测试环境，未配置时回落正式环境", () => {
-    expect(selectCloudEnv("prod-env", "dev-env", "develop")).toBe("dev-env");
-    expect(selectCloudEnv("prod-env", "dev-env", "trial")).toBe("dev-env");
-    expect(selectCloudEnv("prod-env", "", "develop")).toBe("prod-env");
-    expect(selectCloudEnv("prod-env", "", "trial")).toBe("prod-env");
-  });
-  it("缺少版本信息时按开发处理，避免开发写入正式数据", () => {
-    expect(selectCloudEnv("prod-env", "dev-env", undefined)).toBe("dev-env");
-    expect(selectCloudEnv("prod-env", "", undefined)).toBe("prod-env");
+  it.each(["develop", "trial", undefined])("%s 只走测试数据", (version) => {
+    expect(selectCloudTarget("prod-env", "dev-env", "usApi", version)).toEqual({
+      env: "dev-env", functionName: "usApi", localScope: "env.dev-env",
+    });
+    expect(selectCloudTarget("prod-env", "", "usApi", version)).toEqual({
+      env: "prod-env", functionName: "usApiTest", localScope: "test.prod-env",
+    });
   });
 });
 
@@ -26,18 +25,20 @@ describe("小程序本机环境隔离", () => {
     vi.resetModules();
   });
 
-  it("同一设备切换版本时保留原密钥库，并独立保存和清理测试照片", async () => {
+  it.each(["", "dev-env"])("同一设备切换版本时隔离本机数据（独立云环境 %s）", async (devCloudEnv) => {
     let envVersion = "trial";
     const storage = new Map([["us.vault", '{"legacy":true}']]);
     const files = new Map([["/local/us-shared-photo.jpg", "production"]]);
     vi.doMock("../miniprogram/config", () => ({
-      config: { cloudEnv: "prod-env", devCloudEnv: "dev-env", cloudFunction: "usApi" },
+      config: { cloudEnv: "prod-env", devCloudEnv, cloudFunction: "usApi" },
     }));
+    const callFunction = vi.fn(async () => ({ result: { success: true, data: {} } }));
     vi.stubGlobal("wx", {
       getAccountInfoSync: () => ({ miniProgram: { envVersion } }),
       getStorageSync: (key: string) => storage.get(key),
       setStorageSync: (key: string, value: string) => storage.set(key, value),
       removeStorageSync: (key: string) => storage.delete(key),
+      cloud: { callFunction },
       env: { USER_DATA_PATH: "/local" },
       getFileSystemManager: () => ({
         accessSync: (path: string) => {
@@ -51,6 +52,11 @@ describe("小程序本机环境隔离", () => {
     const entry = { visibility: "shared" } as Entry;
     const photo = { id: "photo", mime: "image/jpeg" } as Attachment;
     const dev = await import("../miniprogram/platform");
+    await dev.service.transport.call("health");
+    expect(callFunction).toHaveBeenLastCalledWith(expect.objectContaining({
+      name: devCloudEnv ? "usApi" : "usApiTest",
+      config: { env: devCloudEnv || "prod-env" },
+    }));
     expect(dev.service.vault).toBeNull();
     dev.service.storage.set("vault", '{"testing":true}');
     dev.service.secrets = {} as Secrets;
@@ -61,7 +67,12 @@ describe("小程序本机环境隔离", () => {
     envVersion = "release";
     vi.resetModules();
     const prod = await import("../miniprogram/platform");
+    await prod.service.transport.call("health");
+    expect(callFunction).toHaveBeenLastCalledWith(expect.objectContaining({
+      name: "usApi", config: { env: "prod-env" },
+    }));
     expect(prod.service.vault).toEqual({ legacy: true });
+    expect(dev.localExportPath("backup.json")).not.toBe(prod.localExportPath("backup.json"));
     prod.service.secrets = {} as Secrets;
     const prodPhoto = await prod.photoPath(entry, photo);
     expect(files.get(prodPhoto)).toBe("production");

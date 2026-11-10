@@ -6,6 +6,7 @@ miniprogram/app.js
 miniprogram/pages/**/index.js
 cloudfunctions/usApi/index.js
 cloudfunctions/usApi/node_modules/
+cloudfunctions/usApiTest/
 .env*
 !.env.example
 !.env.*.example

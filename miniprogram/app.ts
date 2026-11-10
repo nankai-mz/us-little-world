@@ -1,5 +1,5 @@
 import "./polyfill";
-import { cloudEnv } from "./cloud";
+import { cloudTarget } from "./cloud";
 import { clearDecryptedFiles, service } from "./platform";
 let hiddenAt = 0;
 App({
@@ -11,7 +11,7 @@ App({
       }
     } catch {}
     clearDecryptedFiles();
-    if (cloudEnv) wx.cloud.init({ env: cloudEnv, traceUser: false });
+    if (cloudTarget.env) wx.cloud.init({ env: cloudTarget.env, traceUser: false });
   },
   onError(err: any) {
     console.error("App.onError:", err);

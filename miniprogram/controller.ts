@@ -1,5 +1,5 @@
 import "./polyfill";
-import { service, photoPath, clearDecryptedFiles } from "./platform";
+import { service, photoPath, clearDecryptedFiles, localExportPath, isTestSpace } from "./platform";
 import { config } from "./config";
 import {
   AppError,
@@ -23,6 +23,7 @@ import {
   secureChoice,
 } from "../src/core/domain";
 import { fingerprint, publicKeys } from "../src/core/crypto";
+import { APP_VERSION } from "../src/core/protocol";
 import { prepareNativePhoto } from "./media";
 import { entryView, navigationTitle } from "./presentation";
 import {
@@ -97,7 +98,7 @@ async function confirm(content: string, title = "温柔提醒") {
   ).confirm;
 }
 async function shareJson(name: string, value: unknown) {
-  const filePath = `${wx.env.USER_DATA_PATH}/${name}.json`;
+  const filePath = localExportPath(`${name}.json`);
   wx.getFileSystemManager().writeFileSync(
     filePath,
     JSON.stringify(value, null, 2),
@@ -119,6 +120,8 @@ export function pageFactory(
         busy: false,
         error: "",
         configured: !!config.cloudEnv,
+        buildVersion: APP_VERSION,
+        isTestSpace,
         day: today(),
         form: {},
         password: "",

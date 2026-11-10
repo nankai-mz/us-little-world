@@ -112,7 +112,7 @@
       <text class="fineprint"
         >继续即了解：仅你的微信身份用于访问控制，内容在设备上加密。密钥丢失后服务器无法恢复。请保存加密备份和恢复密钥。</text
       >
-      <view class="fineprint" style="text-align:center">v1.2.5</view>
+      <view class="fineprint" style="text-align:center">v{{buildVersion}}{{isTestSpace ? ' · 测试空间' : ''}}</view>
     </view>
     <block wx:else>
       <view

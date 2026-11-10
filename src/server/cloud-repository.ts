@@ -1,11 +1,13 @@
 import type { Repository, Tx } from "./api";
 
-export function cloudRepository(db: any): Repository {
+export function cloudRepository(db: any, prefix = ""): Repository {
+  const collectionRef = (client: any, name: string) =>
+    client.collection(prefix + name);
   function adapter(client: any): Tx {
     return {
       async get(collection, id) {
         try {
-          const response = await client.collection(collection).doc(id).get();
+          const response = await collectionRef(client, collection).doc(id).get();
           const data = Array.isArray(response.data)
             ? response.data[0]
             : response.data;
@@ -25,10 +27,10 @@ export function cloudRepository(db: any): Repository {
         }
       },
       async put(collection, id, data) {
-        await client.collection(collection).doc(id).set({ data });
+        await collectionRef(client, collection).doc(id).set({ data });
       },
       async remove(collection, id) {
-        await client.collection(collection).doc(id).remove();
+        await collectionRef(client, collection).doc(id).remove();
       },
     };
   }
@@ -36,8 +38,7 @@ export function cloudRepository(db: any): Repository {
     ...adapter(db),
     transaction: (fn) => db.runTransaction((tx: any) => fn(adapter(tx))),
     async list(collection, where, offset, limit) {
-      const response = await db
-        .collection(collection)
+      const response = await collectionRef(db, collection)
         .where(where)
         .orderBy("_id", "asc")
         .skip(offset)

@@ -1,4 +1,4 @@
-import { selectCloudEnv } from "../src/core/env";
+import { selectCloudTarget } from "../src/core/env";
 import { config } from "./config";
 
 function currentEnvVersion(): string | undefined {
@@ -9,10 +9,9 @@ function currentEnvVersion(): string | undefined {
   }
 }
 
-// Release builds use production; development/trial builds use the dev env
-// when configured, otherwise fall back to production.
-export const cloudEnv = selectCloudEnv(
+export const cloudTarget = selectCloudTarget(
   config.cloudEnv,
   config.devCloudEnv || "",
+  config.cloudFunction,
   currentEnvVersion(),
 );

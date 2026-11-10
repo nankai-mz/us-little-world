@@ -1,13 +1,14 @@
 {
-  "generatedAt": "2026-11-08T07:05:53.995Z",
+  "generatedAt": "2026-11-10T08:26:40.689Z",
   "timezone": "Asia/Shanghai",
-  "version": "1.2.5",
+  "version": "1.2.6",
   "scope": "local-release-preparation",
   "localBuildReady": true,
   "configurationComplete": true,
   "configuration": {
     "appIdConfigured": true,
-    "cloudEnvironmentConfigured": true
+    "cloudEnvironmentConfigured": true,
+    "developmentEnvironmentConfigured": false
   },
   "sdk": {
     "version": "5.0.1-beta.1",
@@ -29,7 +30,7 @@
     {
       "name": "version",
       "status": "pass",
-      "detail": "package 1.2.5; cloud 1.2.5"
+      "detail": "package 1.2.6; cloud 1.2.6"
     },
     {
       "name": "client-permission-template",
@@ -40,6 +41,11 @@
       "name": "location-permissions",
       "status": "pass",
       "detail": "Only active chooseLocation is declared"
+    },
+    {
+      "name": "dev-cloud-env",
+      "status": "pass",
+      "detail": "Empty; develop/trial uses the shared-environment usApiTest function"
     },
     {
       "name": "web-manifest",
@@ -77,7 +83,22 @@
       "detail": "Built after current source changes"
     },
     {
-      "name": "build:dist/assets/index-DDJs2xQ7.js",
+      "name": "build:cloudfunctions/usApiTest/index.js",
+      "status": "pass",
+      "detail": "Built after current source changes"
+    },
+    {
+      "name": "build:cloudfunctions/usApiTest/package.json",
+      "status": "pass",
+      "detail": "Built after current source changes"
+    },
+    {
+      "name": "build:cloudfunctions/usApiTest/package-lock.json",
+      "status": "pass",
+      "detail": "Built after current source changes"
+    },
+    {
+      "name": "build:dist/assets/index-EGu8VTMb.js",
       "status": "pass",
       "detail": "Built after current source changes"
     },
@@ -89,12 +110,12 @@
     {
       "name": "tests",
       "status": "pass",
-      "detail": "83 passed across 8/8 files; full suite and current sources required"
+      "detail": "91 passed across 10/10 files; full suite and current sources required"
     },
     {
       "name": "mini-contract",
       "status": "pass",
-      "detail": "6 routes; 82 conditional bindings; 1147081 bytes; source/Node VM only"
+      "detail": "6 routes; 82 conditional bindings; 1148346 bytes; source/Node VM only"
     },
     {
       "name": "sdk-contract",
@@ -131,13 +152,16 @@
     }
   },
   "outputSha256": {
-    "dist/index.html": "05262b32aad016faa45d0e0adf094212d854063c2c69ed046342c88546759d42",
-    "dist/.vite/manifest.json": "2a6cad1d2a92f1417f0157bec098da083566ac01bf941a5c32d9047a475321a6",
-    "miniprogram/app.js": "2360beadd212e9226b979123d3be27ec54ac1cc28ae51661ee3cd0133a4667ef",
-    "miniprogram/generated/controller.js": "f6eb4e90424426ca3c10009de5ffa0b96b8d6fb153f8d46cf69dfbc6472ce0ea",
-    "miniprogram/generated/platform.js": "f7892f33ea1c3f107a7c42397acb643d361302b7d31cd0dd5b0aea8ded72f4a9",
-    "cloudfunctions/usApi/index.js": "df443309b2e1765cc5da17dfa5cb05c3cafc209b9798c5a54a03c234da705bde",
-    "dist/assets/index-DDJs2xQ7.js": "54aec5f971794598753907a4baf1dd43777fe97e4d888919aa85ee361190c1fd",
+    "dist/index.html": "3ba96b9990f6afdfe8a4b4952a5f1ac59d96ec323c06f70a6002fba196f03c34",
+    "dist/.vite/manifest.json": "2bb9df91e82264200d500dd53f243cda1268e74576fb5dd91b8c3b23d7faeb80",
+    "miniprogram/app.js": "8ade973e1b7584d57fb3a9fa15310f7978ebd94bb7123d270a97570277d97f55",
+    "miniprogram/generated/controller.js": "0163e037ba81311571be1f7a0d056416e661cd6aca084a5118acdfe5e1a88989",
+    "miniprogram/generated/platform.js": "041572dd33e7dd66010248a35fe49f268a46a2f5db559f3ca290f671d54ea045",
+    "cloudfunctions/usApi/index.js": "1f4559d7994ab145e8984d2ae4175d7cd873d5f60ab1fb366dd65c247dfbea33",
+    "cloudfunctions/usApiTest/index.js": "9918b1c091263a48c9e6f534f9aa011c7b7099cab634db4aaae33268fd0ec364",
+    "cloudfunctions/usApiTest/package.json": "8257c0fa401607f8edb2ba823fe0a1aa809d1702c2110c35121fefd3eae3ba12",
+    "cloudfunctions/usApiTest/package-lock.json": "047363111ee16ad2546b7835b624de9cdb058c96ac360bd40d6044842e2e84f8",
+    "dist/assets/index-EGu8VTMb.js": "3e455c6217cc5435fe39587d52833870d9ab91848f3a3575f8c99ccbbced9463",
     "dist/assets/index-BlJGcgSX.css": "0b13019d717b20a0f38ff99743b565175f170d0066b482cfea8952ccadab9d2d"
   },
   "nextStep": "Deploy into a test environment and perform real two-account/device acceptance"

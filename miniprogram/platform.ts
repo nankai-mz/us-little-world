@@ -2,13 +2,18 @@ import "./polyfill";
 import { AppError, type RandomSource } from "../src/core/types";
 import { createTransport } from "../src/core/transport";
 import { UsService } from "../src/core/service";
-import { config } from "./config";
-import { cloudEnv } from "./cloud";
+import { cloudTarget } from "./cloud";
 
-// Keep the existing vault keys for the original environment.
-const isolatedEnv = cloudEnv !== config.cloudEnv ? cloudEnv : "";
-const storagePrefix = isolatedEnv ? `us.env.${isolatedEnv}.` : "us.";
-const photoPrefix = isolatedEnv ? `us-env.${isolatedEnv}.` : "us-";
+const { env, functionName, localScope } = cloudTarget;
+export const isTestSpace = !!localScope;
+// Keep the existing production vault keys and file names.
+const storagePrefix = localScope ? `us.${localScope}.` : "us.";
+const photoPrefix = localScope ? `us-${localScope}.` : "us-";
+
+export function localExportPath(fileName: string) {
+  const prefix = localScope ? `us-${localScope}.` : "";
+  return `${wx.env.USER_DATA_PATH}/${prefix}${fileName}`;
+}
 
 const rng: RandomSource = (n) =>
   new Promise((resolve, reject) => {
@@ -26,13 +31,14 @@ const rng: RandomSource = (n) =>
     });
   });
 const transport = createTransport(async (action, data) => {
-  if (!cloudEnv)
+  if (!env)
     throw new AppError(
       "CLOUD_NOT_CONFIGURED",
       "请先在 miniprogram/config.ts 填写云环境 ID 并部署 usApi",
     );
   const res = await wx.cloud.callFunction({
-    name: config.cloudFunction,
+    name: functionName,
+    config: { env },
     data: { action, data },
   });
   return res.result;
