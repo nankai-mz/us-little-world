@@ -127,6 +127,11 @@ async function authorizedDevice(
 }
 export function createApi(deps: ServerDeps) {
   const { repo, now, hash } = deps;
+  function photoFileId(spaceId: string, userId: string, value: unknown) {
+    const receipt = str(value, 64);
+    ensure(/^[a-f0-9]{64}$/.test(receipt), "INVALID_REQUEST", "照片回执格式不正确");
+    return hash(JSON.stringify([spaceId, userId, receipt])).slice(0, 32);
+  }
   return async function handle(
     userId: string,
     action: string,
@@ -275,6 +280,7 @@ export function createApi(deps: ServerDeps) {
           "listRecords",
           "listDevices",
           "fileGet",
+          "fileUploadStatus",
           "closeSpace",
           "cancelClose",
         ].includes(action);
@@ -603,7 +609,16 @@ export function createApi(deps: ServerDeps) {
             "可见范围不正确",
           );
           ensure(deps.filePut, "NOT_CONFIGURED", "文件服务尚未配置");
-          const fileId = deps.id();
+          const receipt = input.receipt;
+          if (receipt !== undefined)
+            ensure(
+              receipt === hash(JSON.stringify([input.visibility, envelope])),
+              "INVALID_REQUEST",
+              "照片回执与密文不匹配",
+            );
+          const fileId = receipt === undefined
+            ? deps.id()
+            : photoFileId(spaceId, userId, receipt);
           const storageId = await deps.filePut(
             `encrypted/${spaceId}/${fileId}.enc`,
             JSON.stringify(envelope),
@@ -616,6 +631,12 @@ export function createApi(deps: ServerDeps) {
             storageId,
           });
           result = { id: fileId };
+        } else if (action === "fileUploadStatus") {
+          const fileId = photoFileId(spaceId, userId, input.receipt);
+          const file = await repo.get("encrypted_files", fileId);
+          result = {
+            id: file?.spaceId === spaceId && file.creatorId === userId ? fileId : null,
+          };
         } else if (action === "fileGet" || action === "fileDelete") {
           const file = await repo.get("encrypted_files", id(input.fileId));
           ensure(

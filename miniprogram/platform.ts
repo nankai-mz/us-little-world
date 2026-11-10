@@ -36,11 +36,32 @@ const transport = createTransport(async (action, data) => {
       "CLOUD_NOT_CONFIGURED",
       "请先在 miniprogram/config.ts 填写云环境 ID 并部署 usApi",
     );
-  const res = await wx.cloud.callFunction({
+  const request = {
     name: functionName,
     config: { env },
     data: { action, data },
-  });
+  };
+  if (action === "filePut" || action === "fileUploadStatus") {
+    return new Promise((resolve, reject) => {
+      const startedAt = Date.now();
+      if (isTestSpace) console.info("[photo]", action, "sent");
+      wx.cloud.callFunction({
+        ...request,
+        success: (result) => {
+          if (isTestSpace) console.info("[photo]", action, "reply", Date.now() - startedAt);
+          resolve(result.result);
+        },
+        fail: (error) => {
+          if (isTestSpace) {
+            const code = /\berrCode:\s*(-?\d{1,8})\b/.exec(error.errMsg)?.[1] || "unknown";
+            console.info("[photo]", action, "fail", Date.now() - startedAt, code);
+          }
+          reject(error);
+        },
+      });
+    });
+  }
+  const res = await wx.cloud.callFunction(request);
   return res.result;
 });
 export const service = new UsService(

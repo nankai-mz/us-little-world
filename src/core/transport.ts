@@ -7,10 +7,12 @@ const READ_ACTIONS = new Set([
   "listDevices",
   "getTransfers",
   "fileGet",
+  "fileUploadStatus",
 ]);
 const ACTION_TIMEOUT_MS = new Map([
   ["aiGenerate", 35000],
   ["filePut", 45000],
+  ["fileUploadStatus", 5000],
 ]);
 export function createTransport(
   invoke: (action: string, data: Record<string, unknown>) => Promise<unknown>,

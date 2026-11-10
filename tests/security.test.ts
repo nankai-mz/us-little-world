@@ -306,6 +306,48 @@ describe("云端权限、并发与客户端集成", () => {
     ).rejects.toMatchObject({ code: "FORBIDDEN" });
     expect(await a.readPhoto(photo, "private")).toBe("AQID");
   });
+  it("照片回执丢失时只查询一次保存结果，不重传密文", async () => {
+    const { a, b, files } = await setup();
+    const invoke = a.transport.call.bind(a.transport);
+    let receipt: unknown;
+    let writes = 0;
+    let checks = 0;
+    a.transport.call = async <T>(action: string, data = {} as Record<string, unknown>) => {
+      if (action === "filePut") {
+        writes++;
+        receipt = data.receipt;
+        await invoke(action, data);
+        throw new AppError("TIMEOUT", "模拟上传回执丢失");
+      }
+      if (action === "fileUploadStatus") {
+        checks++;
+        expect(data).not.toHaveProperty("envelope");
+      }
+      return invoke<T>(action, data);
+    };
+
+    const photo = await a.addPhoto("AQID", "image/png", "照片", "private");
+    expect(await a.readPhoto(photo, "private")).toBe("AQID");
+    expect(writes).toBe(1);
+    expect(checks).toBe(1);
+    expect(Object.keys(files)).toHaveLength(1);
+    expect(await b.call("fileUploadStatus", { receipt })).toEqual({ id: null });
+  });
+  it("区分云端没有照片登记和照片状态请求失败", async () => {
+    const { a } = await setup();
+    const invoke = a.transport.call.bind(a.transport);
+    let networkUnavailable = false;
+    a.transport.call = async <T>(action: string, data = {}) => {
+      if (action === "filePut" || (networkUnavailable && action === "fileUploadStatus"))
+        throw new AppError("TIMEOUT", "模拟连接超时");
+      return invoke<T>(action, data);
+    };
+    await expect(a.addPhoto("AQID", "image/png", "照片", "shared"))
+      .rejects.toMatchObject({ code: "PHOTO_NOT_CONFIRMED" });
+    networkUnavailable = true;
+    await expect(a.addPhoto("AQID", "image/png", "照片", "shared"))
+      .rejects.toMatchObject({ code: "PHOTO_STATUS_UNAVAILABLE" });
+  });
   it("邀请码只用一次，两个同时加入也不能出现第三名成员", async () => {
     const { a, repo, transport } = await setup();
     await expect(a.call("createInvitation")).rejects.toMatchObject({

@@ -532,19 +532,41 @@ export class UsService {
       throw new AppError("INVALID_IMAGE", "支持 JPG、PNG 和 WebP 图片");
     if (base64ByteLength(bytes) > MAX_PHOTO_BYTES)
       throw new AppError("FILE_TOO_LARGE", "请使用小于 500 KB 的照片");
+    const session = this.secrets;
+    const space = this.space;
+    if (!session || !space) throw new AppError("LOCKED", "请先解锁");
     const photoId = await randomId(this.rng);
-    const aad = `Us/file/1/${this.space!.id}/${photoId}/${visibility}`;
-    const version = this.space!.keyVersion;
+    if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+    const aad = `Us/file/1/${space.id}/${photoId}/${visibility}`;
+    const version = space.keyVersion;
     const key = unb64(
       visibility === "private"
-        ? this.secrets!.personalKey
-        : this.secrets!.spaceKeys[version],
+        ? session.personalKey
+        : session.spaceKeys[version],
     );
     const envelope = await seal({ base64: bytes }, key, aad, this.rng, version);
-    const { id: fileId } = await this.call<{ id: string }>("filePut", {
-      envelope,
-      visibility,
-    });
+    if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+    const receipt = hashText(JSON.stringify([visibility, envelope]));
+    let fileId: string;
+    try {
+      ({ id: fileId } = await this.call<{ id: string }>("filePut", {
+        envelope,
+        visibility,
+        receipt,
+      }));
+    } catch (error) {
+      if (!(error instanceof AppError) || !["TIMEOUT", "NETWORK_ERROR"].includes(error.code))
+        throw error;
+      if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+      const status = await this.call<{ id: string | null }>("fileUploadStatus", { receipt })
+        .catch(() => null);
+      if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+      if (!status)
+        throw new AppError("PHOTO_STATUS_UNAVAILABLE", "P02 云端状态查询失败");
+      if (!status.id)
+        throw new AppError("PHOTO_NOT_CONFIRMED", "P01 云端暂未查到照片");
+      fileId = status.id;
+    }
     return {
       id: photoId,
       fileId,

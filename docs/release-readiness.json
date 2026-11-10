@@ -1,7 +1,7 @@
 {
-  "generatedAt": "2026-11-10T09:39:36.591Z",
+  "generatedAt": "2026-11-10T09:54:20.538Z",
   "timezone": "Asia/Shanghai",
-  "version": "1.2.8",
+  "version": "1.2.9",
   "scope": "local-release-preparation",
   "localBuildReady": true,
   "configurationComplete": true,
@@ -30,7 +30,7 @@
     {
       "name": "version",
       "status": "pass",
-      "detail": "package 1.2.8; cloud 1.2.8"
+      "detail": "package 1.2.9; cloud 1.2.9"
     },
     {
       "name": "client-permission-template",
@@ -98,7 +98,7 @@
       "detail": "Built after current source changes"
     },
     {
-      "name": "build:dist/assets/index-DeMflw2c.js",
+      "name": "build:dist/assets/index-CO0etdT3.js",
       "status": "pass",
       "detail": "Built after current source changes"
     },
@@ -110,12 +110,12 @@
     {
       "name": "tests",
       "status": "pass",
-      "detail": "94 passed across 11/11 files; full suite and current sources required"
+      "detail": "96 passed across 11/11 files; full suite and current sources required"
     },
     {
       "name": "mini-contract",
       "status": "pass",
-      "detail": "6 routes; 82 conditional bindings; 1148792 bytes; source/Node VM only"
+      "detail": "6 routes; 82 conditional bindings; 1149971 bytes; source/Node VM only"
     },
     {
       "name": "sdk-contract",
@@ -152,16 +152,16 @@
     }
   },
   "outputSha256": {
-    "dist/index.html": "a081c810d5b8413f0bed0ed0816be9b810793e1cd4ad9874e8ea694133e3f182",
-    "dist/.vite/manifest.json": "eb3938621e38e38815b53b00774b1084197f8fc63aaec713ee396e97b22d2227",
+    "dist/index.html": "7ceb7cd036169fdba008248315c238172c5991f7c5a5eb15801cd024101dbfec",
+    "dist/.vite/manifest.json": "4e6b03b3636f65ae8a3983be5e529ca2a6698dabad5fdc8d832f296631243aea",
     "miniprogram/app.js": "8ade973e1b7584d57fb3a9fa15310f7978ebd94bb7123d270a97570277d97f55",
-    "miniprogram/generated/controller.js": "704dde1585722df03f8d694386c090317df9a436fc8260604fead0413fef81e2",
-    "miniprogram/generated/platform.js": "f2484be66f1f1638db5ad81b1c0d72c27064068b287cdd8ff72d21e442dfc1db",
-    "cloudfunctions/usApi/index.js": "52c7a71490fae54a276c6e30eedf91b5334cdb9eec85b65b0647998a8b9b9d39",
-    "cloudfunctions/usApiTest/index.js": "f41732023c0f0e383db06c483067b440bfe5a0b6e2028069b077b5ccba1d8a9b",
-    "cloudfunctions/usApiTest/package.json": "b7f91c1b446a71b64ac1e377a00e13433327934f7ee97a9558cad63e31f7958e",
-    "cloudfunctions/usApiTest/package-lock.json": "4bdfcad5051ad1cc805efba7ea8c28a77b222417abb8865e7105bf4a98dcb95e",
-    "dist/assets/index-DeMflw2c.js": "af6557a023da44655b32e5306e5de6ffb530faccad500976a5ba06f29f549df8",
+    "miniprogram/generated/controller.js": "90cf7a75ddaa02979f3a7568c469727a4f3d550563cc19c3d50f0d40b54f09de",
+    "miniprogram/generated/platform.js": "a572cf6eb094716408540a2d11a80e52ac8e3d56ebdfc9983fa0445beca3b183",
+    "cloudfunctions/usApi/index.js": "094c9a70a0633df27b691ce47d44818a10124acebb45e8d4175bbf63430dabbc",
+    "cloudfunctions/usApiTest/index.js": "c86dccd3d3283429e5d16210568fb41d0c7e82d585a9271d2bf31a624a2704d3",
+    "cloudfunctions/usApiTest/package.json": "26c80b4ef600e6ead67658a90d820f87f26519db9e50baf540d944f07bb28173",
+    "cloudfunctions/usApiTest/package-lock.json": "9364f612354ec0ac13d00d8c3507c8b5ce290c1b883f2224f43c572c3fb6f7dd",
+    "dist/assets/index-CO0etdT3.js": "6720256b4ab71dd2f8df18014230b6b5e30c082a564c46256b2896b53f26ac08",
     "dist/assets/index-BlJGcgSX.css": "0b13019d717b20a0f38ff99743b565175f170d0066b482cfea8952ccadab9d2d"
   },
   "nextStep": "Deploy into a test environment and perform real two-account/device acceptance"
