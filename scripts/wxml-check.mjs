@@ -1,6 +1,12 @@
 /** Source checks only; this deliberately does not claim to be the WeChat compiler. */
 export function validateWxml(source, label = "WXML") {
   const errors = [];
+  for (const match of source.matchAll(/\{\{([\s\S]*?)\}\}/g)) {
+    if (/&amp;&amp;|&(?:lt|gt);/.test(match[1])) {
+      const line = source.slice(0, match.index).split("\n").length;
+      errors.push(`${label}:${line}: binding operators must not be HTML-escaped`);
+    }
+  }
   for (const match of source.matchAll(
     /wx:(if|elif|for)\s*=\s*(["'])(.*?)\2/gs,
   )) {

@@ -28,6 +28,14 @@ describe("CloudBase 适配器", () => {
     expect(
       await cloudRepository(db({ code: "DOCUMENT_NOT_EXIST" })).get("x", "r"),
     ).toBeNull();
+    expect(
+      await cloudRepository(
+        db({ code: "-501001", message: "document.get:fail document not found" }),
+      ).get("x", "r"),
+    ).toBeNull();
+    await expect(
+      cloudRepository(db({ code: "-501001", message: "network timeout" })).get("x", "r"),
+    ).rejects.toMatchObject({ code: "-501001" });
     await expect(
       cloudRepository(db({ code: "PERMISSION_DENIED" })).get("x", "r"),
     ).rejects.toMatchObject({ code: "PERMISSION_DENIED" });

@@ -28,7 +28,7 @@
   display: grid;
   grid-template-columns: 1fr auto;
   gap: 16px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   margin: 25px 0;
 }
@@ -41,7 +41,7 @@
 }
 .history-entry p {
   white-space: pre-wrap;
-  font-size: 11px;
+  font-size: 12px;
   margin: 8px 0;
 }
 :root {
@@ -159,7 +159,7 @@ strong {
   font-weight: 500;
 }
 small {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 .muted {
@@ -168,11 +168,11 @@ small {
   line-height: 1.9;
 }
 .tiny {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 .eyebrow {
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 2px;
   color: var(--muted);
   font-family: Georgia, serif;
@@ -221,7 +221,7 @@ small {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--rose);
   padding: 7px 0;
 }
@@ -250,7 +250,7 @@ small {
   background: var(--rose-bg);
 }
 .fineprint {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   line-height: 1.9;
   margin-top: 14px;
@@ -321,9 +321,9 @@ small {
   display: block;
   margin-top: 6px;
   font-family: Georgia, serif;
-  font-size: 7px;
+  font-size: 12px;
   letter-spacing: 1.4px;
-  color: #a39c8f;
+  color: var(--muted);
 }
 .side-space {
   margin: 38px 0 31px;
@@ -354,7 +354,7 @@ small {
   overflow: hidden;
   flex-shrink: 0;
   background: #e3d9c3;
-  color: #847451;
+  color: #4a3e35;
   box-shadow: inset 0 0 0 4px #ffffff58;
 }
 .avatar:before {
@@ -369,11 +369,11 @@ small {
 }
 .avatar.a {
   background: #e9dfce;
-  color: #937d58;
+  color: #4a3e35;
 }
 .avatar.b {
   background: #d8ddd3;
-  color: #798973;
+  color: #4a3e35;
 }
 .avatar-pair .b {
   margin-left: 14px;
@@ -391,7 +391,7 @@ small {
 .avatar.small {
   width: 29px;
   height: 29px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .avatar.large {
   height: 54px;
@@ -409,11 +409,11 @@ small {
   letter-spacing: 1px;
 }
 .side-space .tiny {
-  font-size: 11px;
+  font-size: 12px;
 }
 .nav-label {
-  font-size: 11px;
-  color: #a29b8d;
+  font-size: 12px;
+  color: var(--muted);
   letter-spacing: 2px;
   margin: 0 11px 12px;
 }
@@ -432,7 +432,7 @@ small {
   background: #fff9;
 }
 .nav-item.active {
-  background: #e9ded2;
+  background: var(--rose-bg);
   color: var(--rose);
   font-weight: 600;
 }
@@ -465,7 +465,7 @@ small {
 .side-quote > span {
   font-family: Georgia, serif;
   font-style: italic;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 .side-security {
@@ -476,7 +476,7 @@ small {
   gap: 9px;
   align-items: center;
   width: 100%;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 .side-security svg:last-child {
@@ -487,7 +487,7 @@ small {
   align-items: center;
   justify-content: center;
   gap: 7px;
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 1px;
   color: var(--muted);
   margin-top: 17px;
@@ -522,7 +522,7 @@ small {
   align-items: center;
   gap: 13px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .breadcrumb strong {
   color: var(--ink);
@@ -538,7 +538,7 @@ small {
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   margin-right: 7px;
 }
 .content {
@@ -554,7 +554,7 @@ small {
   gap: 20px;
 }
 .page-heading .eyebrow {
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 1.8px;
 }
 .page-heading h1 {
@@ -562,7 +562,7 @@ small {
 }
 .page-heading > div > p {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 .heading-flower {
   font-family: serif;
@@ -581,7 +581,7 @@ small {
   border-radius: 8px;
   white-space: nowrap;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   background: var(--paper);
 }
 .home-top {
@@ -616,9 +616,9 @@ small {
   height: 210px;
 }
 .hero-label {
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 2px;
-  color: #ac9479;
+  color: var(--muted);
   display: flex;
   align-items: center;
   gap: 5px;
@@ -638,8 +638,8 @@ small {
   transform: rotate(-8deg);
 }
 .together-caption {
-  font-size: 11px;
-  color: #9b8b75;
+  font-size: 12px;
+  color: var(--muted);
   letter-spacing: 2px;
 }
 .together-number {
@@ -665,12 +665,12 @@ small {
   font-weight: 400;
   left: calc(100% + 15px);
   top: 33px;
-  color: #b7a78e;
+  color: var(--muted);
   transform: rotate(-8deg);
 }
 .hero-since {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   letter-spacing: 0.5px;
 }
@@ -685,8 +685,8 @@ small {
   border: 1px solid #dacbb5;
   border-radius: 7px;
   background: #fff9edaa;
-  color: #987d5d;
-  font-size: 11px;
+  color: var(--muted);
+  font-size: 12px;
 }
 .relationship-settings:hover {
   background: #fff9ed;
@@ -701,7 +701,7 @@ small {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   margin-top: 17px;
   padding: 12px 0;
@@ -740,7 +740,7 @@ small {
   color: #b7a87f;
 }
 .section-title .tiny {
-  font-size: 11px;
+  font-size: 12px;
 }
 .mood-row {
   display: flex;
@@ -753,12 +753,12 @@ small {
   flex: 1;
 }
 .mood-row strong {
-  font-size: 11px;
+  font-size: 12px;
   display: block;
   margin-bottom: 8px;
 }
 .mood-row strong .tiny {
-  font-size: 11px;
+  font-size: 12px;
 }
 .mood-bubble {
   display: flex;
@@ -769,14 +769,14 @@ small {
   padding: 6px 10px;
   border-radius: 2px 9px 9px 9px;
   width: fit-content;
-  font-size: 11px;
-  color: #a08b60;
+  font-size: 12px;
+  color: var(--muted);
   line-height: 1.5;
 }
 .mood-bubble.lavender {
   background: #f0eef5;
   border-color: #e9e5f0;
-  color: #a39bad;
+  color: var(--muted);
 }
 .mood-sun,
 .mood-cloud {
@@ -795,8 +795,8 @@ small {
   align-items: center;
   justify-content: center;
   gap: 7px;
-  font-size: 11px;
-  color: #aaa38f;
+  font-size: 12px;
+  color: var(--muted);
   padding: 12px 0;
 }
 .soft-note svg {
@@ -850,13 +850,13 @@ small {
   color: #b49a6c;
 }
 .quick-actions strong {
-  font-size: 11px;
+  font-size: 12px;
   display: block;
   margin-bottom: 6px;
 }
 .quick-actions small {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   white-space: nowrap;
 }
 .quick-actions > button > svg {
@@ -871,8 +871,8 @@ small {
 }
 .title-note {
   font-family: Georgia, serif;
-  color: #b6aa98;
-  font-size: 7px;
+  color: var(--muted);
+  font-size: 12px;
   letter-spacing: 1px;
   font-weight: 400;
   margin-left: 4px;
@@ -917,18 +917,18 @@ small {
   align-items: center;
   justify-content: space-between;
   gap: 4px;
-  font-size: 11px;
-  color: #b1a594;
+  font-size: 12px;
+  color: var(--muted);
   margin-bottom: 8px;
 }
 .meta > span:last-child {
   display: flex;
   align-items: center;
   gap: 3px;
-  font-size: 7px;
+  font-size: 12px;
 }
 .memory-copy h3 {
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.8;
   white-space: nowrap;
   overflow: hidden;
@@ -936,8 +936,8 @@ small {
   padding-right: 5px;
 }
 .memory-copy p {
-  font-size: 11px;
-  color: #aaa394;
+  font-size: 12px;
+  color: var(--muted);
   overflow: hidden;
   display: -webkit-box;
   -webkit-line-clamp: 2;
@@ -953,17 +953,17 @@ small {
   margin-top: 12px;
 }
 .tags > span {
-  font-size: 11px;
+  font-size: 12px;
   padding: 3px 7px;
   border-radius: 4px;
   background: #f6f1e9;
-  color: #af9b82;
+  color: var(--muted);
 }
 .memory-heart {
   position: absolute;
   right: 12px;
   bottom: 14px;
-  color: #c0b6a6;
+  color: var(--rose);
   background: var(--paper);
   height: 24px;
   display: flex;
@@ -971,18 +971,18 @@ small {
   padding: 0 2px;
 }
 .memory-heart.liked {
-  color: #b87f74;
+  color: var(--rose);
 }
 .home-tip {
-  font-size: 11px;
-  color: #b6ad9d;
+  font-size: 12px;
+  color: var(--muted);
   text-align: center;
   margin-top: 15px;
   font-family: "Noto Serif SC", serif;
   letter-spacing: 0.6px;
 }
 .home-tip > span {
-  color: #b29668;
+  color: var(--muted);
   font-size: 15px;
   margin-right: 7px;
 }
@@ -1015,12 +1015,12 @@ small {
   left: 50%;
   transform: translateX(-50%) rotate(-3deg);
   background: #fffaf2;
-  font-size: 11px;
+  font-size: 12px;
   padding: 6px 10px;
   border-radius: 8px;
   border: 1px solid #e6ddcb;
   white-space: nowrap;
-  color: #ac9c81;
+  color: var(--muted);
 }
 .pet-speech:after {
   content: "";
@@ -1039,15 +1039,15 @@ small {
   bottom: 10px;
   left: 50%;
   transform: translateX(-50%);
-  font-size: 11px;
+  font-size: 12px;
   font-family: "Noto Serif SC";
 }
 .pet-name small {
-  font-size: 11px;
+  font-size: 12px;
   background: #ebe7da;
   padding: 3px 6px;
   border-radius: 7px;
-  color: #9b8c70;
+  color: var(--muted);
   margin-left: 6px;
 }
 .pet-bottom {
@@ -1056,8 +1056,8 @@ small {
   justify-content: space-between;
   border-top: 1px dashed var(--line);
   padding: 10px 0;
-  font-size: 11px;
-  color: #a39b88;
+  font-size: 12px;
+  color: var(--muted);
 }
 .pet-bottom > span {
   display: flex;
@@ -1071,9 +1071,9 @@ small {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: 12px;
   background: #f5efdf;
-  color: #a08b63;
+  color: var(--muted);
 }
 .daily-prompt {
   background: #f0f0e8;
@@ -1087,7 +1087,7 @@ small {
 }
 .daily-icon {
   border: 1px dashed #cbcdbb;
-  color: #9da386;
+  color: var(--muted);
   border-radius: 50%;
   height: 43px;
   width: 43px;
@@ -1105,14 +1105,14 @@ small {
   margin-top: 5px;
 }
 .daily-prompt .eyebrow {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 .app-footer {
   display: flex;
   justify-content: space-between;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
   border-top: 1px solid var(--line);
   padding: 21px 0;
   margin-top: 30px;
@@ -1155,15 +1155,15 @@ small {
   background: #ede5da66;
 }
 .pills > button.selected {
-  background: #eae2d5;
+  background: var(--rose-bg);
   color: var(--ink);
 }
 .pills.small > button {
   padding: 7px 12px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .pills.small > button.selected {
-  background: #f2e8df;
+  background: var(--rose-bg);
 }
 .filter-row {
   display: flex;
@@ -1179,7 +1179,7 @@ small {
   border: 1px solid var(--line);
   border-radius: 8px;
   padding: 0 10px;
-  color: #b5aa98;
+  color: var(--muted);
 }
 .search input {
   border: 0;
@@ -1187,7 +1187,7 @@ small {
   background: none;
   padding: 9px 0;
   width: 170px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .filter-detail {
   display: flex;
@@ -1199,7 +1199,7 @@ small {
   margin-top: 15px;
 }
 .filter-detail label {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   display: flex;
   align-items: center;
@@ -1209,7 +1209,7 @@ small {
 .filter-detail select {
   padding: 7px 9px;
   width: 140px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .filter-detail select {
   width: 70px;
@@ -1224,7 +1224,7 @@ small {
   justify-content: center;
   flex-direction: column;
   gap: 15px;
-  color: #b3a58c;
+  color: var(--muted);
   padding: 30px;
 }
 .text-cover p {
@@ -1239,8 +1239,8 @@ small {
   flex-direction: column;
   gap: 10px;
   background: #ede8de;
-  color: #a39a89;
-  font-size: 11px;
+  color: var(--muted);
+  font-size: 12px;
   min-height: 100px;
 }
 .feature-banner {
@@ -1264,7 +1264,7 @@ small {
 }
 .feature-banner p {
   font-size: 12px;
-  color: #a2917d;
+  color: var(--muted);
 }
 .capsule-banner {
   background: #f3e9e4;
@@ -1298,14 +1298,14 @@ small {
   min-height: 245px;
 }
 .capsule-card .eyebrow {
-  font-size: 11px;
+  font-size: 12px;
   margin-top: 8px;
 }
 .capsule-card h3 {
   margin: 15px 0 9px;
 }
 .capsule-card > p {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 .capsule-stamp {
@@ -1322,7 +1322,7 @@ small {
 }
 .countdown {
   display: block;
-  color: #b58a79;
+  color: var(--muted);
   font-family: "Noto Serif SC", serif;
   font-size: 17px;
   margin: 20px 0;
@@ -1331,7 +1331,7 @@ small {
   margin-top: auto;
 }
 .capsule-card .faint {
-  font-size: 11px;
+  font-size: 12px;
   margin-top: 6px;
 }
 .album-grid {
@@ -1364,7 +1364,7 @@ small {
   line-height: 1.8;
 }
 .polaroid small {
-  font-size: 11px;
+  font-size: 12px;
   display: block;
   margin-top: 8px;
 }
@@ -1373,12 +1373,12 @@ small {
   text-align: center;
   font-family: Georgia;
   font-size: 45px;
-  color: #9aa087;
+  color: var(--muted);
 }
 .map-count small {
   display: block;
   font-family: inherit;
-  font-size: 11px;
+  font-size: 12px;
 }
 .map-layout {
   display: grid;
@@ -1441,10 +1441,10 @@ small {
   position: absolute;
   font-family: Georgia;
   letter-spacing: 3px;
-  font-size: 11px;
+  font-size: 12px;
   top: 24px;
   left: 25px;
-  color: #9aa88c;
+  color: var(--muted);
 }
 .map-pin {
   position: absolute;
@@ -1452,18 +1452,18 @@ small {
   align-items: center;
   flex-direction: column;
   gap: 7px;
-  color: #b28773;
+  color: var(--muted);
 }
 .map-pin > svg {
   stroke: #fff;
   filter: drop-shadow(0 3px 1px #575d4219);
 }
 .map-pin > span {
-  font-size: 11px;
+  font-size: 12px;
   background: #fffdf4d9;
   padding: 6px 12px;
   border-radius: 6px;
-  color: #8b806c;
+  color: var(--muted);
 }
 .map-disclaimer {
   position: absolute;
@@ -1471,8 +1471,8 @@ small {
   left: 0;
   width: 100%;
   text-align: center;
-  font-size: 11px;
-  color: #96a18a;
+  font-size: 12px;
+  color: var(--muted);
 }
 .place-row {
   display: flex;
@@ -1487,14 +1487,14 @@ small {
   background: #eee8da;
   padding: 13px;
   border-radius: 10px;
-  color: #b29677;
+  color: var(--muted);
 }
 .place-row strong {
   font-size: 12px;
   display: block;
 }
 .place-row small {
-  font-size: 11px;
+  font-size: 12px;
   display: block;
   margin-top: 8px;
 }
@@ -1504,7 +1504,7 @@ small {
 }
 .map-privacy {
   padding: 18px;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   line-height: 1.8;
   background: var(--paper);
@@ -1525,7 +1525,7 @@ small {
 .report-cover h2 {
   font-size: 55px;
   font-family: Georgia;
-  color: #a68f6e;
+  color: var(--muted);
   line-height: 1.4;
   margin: 15px 0;
 }
@@ -1539,14 +1539,14 @@ small {
 }
 .report-cover p {
   font-size: 12px;
-  color: #a59478;
+  color: var(--muted);
 }
 .report-cover .pills {
   justify-content: center;
   margin-top: 24px;
 }
 .report-cover .pills > button.selected {
-  background: #fffcf47a;
+  background: var(--rose-bg);
 }
 .stats-grid {
   display: grid;
@@ -1565,10 +1565,10 @@ small {
   display: block;
   font-size: 33px;
   font-family: Georgia;
-  color: #ae9776;
+  color: var(--muted);
 }
 .stats-grid span {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   display: block;
   margin-top: 10px;
@@ -1623,7 +1623,7 @@ small {
   display: block;
 }
 .ai-selector small {
-  font-size: 11px;
+  font-size: 12px;
   display: block;
   margin-top: 7px;
 }
@@ -1649,18 +1649,18 @@ small {
   min-height: 330px;
   text-align: center;
   gap: 16px;
-  color: #b1a28b;
+  color: var(--muted);
 }
 .empty-ai h3 {
   font-family: "Noto Serif SC", serif;
-  color: #8c7f6a;
+  color: var(--muted);
 }
 .empty-ai p {
-  font-size: 11px;
+  font-size: 12px;
 }
 .check-line {
-  font-size: 11px;
-  color: #948b7c;
+  font-size: 12px;
+  color: var(--muted);
   line-height: 1.8;
   display: flex;
   gap: 9px;
@@ -1686,7 +1686,7 @@ small {
 .game-icon {
   display: inline-flex;
   background: #eee8dc;
-  color: #ab9676;
+  color: var(--muted);
   padding: 17px;
   border-radius: 17px;
   margin-bottom: 20px;
@@ -1694,12 +1694,12 @@ small {
 .game-1 .game-icon,
 .game-4 .game-icon {
   background: #e9ece2;
-  color: #95a07c;
+  color: var(--muted);
 }
 .game-2 .game-icon,
 .game-5 .game-icon {
   background: #efe7e9;
-  color: #b1949b;
+  color: var(--muted);
 }
 .game-card h3 {
   font-size: 16px;
@@ -1707,7 +1707,7 @@ small {
   margin-bottom: 12px;
 }
 .game-card p {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   min-height: 43px;
   line-height: 2;
@@ -1716,8 +1716,8 @@ small {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  font-size: 11px;
-  color: #b29a7d;
+  font-size: 12px;
+  color: var(--muted);
   margin-top: 25px;
   padding-top: 14px;
   border-top: 1px dashed var(--line);
@@ -1751,8 +1751,8 @@ small {
   margin: 10px 0;
 }
 .pet-page-heading p {
-  font-size: 11px;
-  color: #a49b86;
+  font-size: 12px;
+  color: var(--muted);
 }
 .pet-level {
   position: absolute;
@@ -1760,11 +1760,11 @@ small {
   left: 50%;
   transform: translateX(-50%);
   white-space: nowrap;
-  font-size: 11px;
+  font-size: 12px;
   background: #fffdf5b0;
   padding: 8px 17px;
   border-radius: 20px;
-  color: #b39974;
+  color: var(--muted);
 }
 .pet-stats {
   margin: 25px 0;
@@ -1775,9 +1775,9 @@ small {
 .pet-stats > div > span {
   display: flex;
   justify-content: space-between;
-  font-size: 11px;
+  font-size: 12px;
   margin-bottom: 9px;
-  color: #9a8e76;
+  color: var(--muted);
 }
 .progress {
   height: 6px;
@@ -1798,7 +1798,7 @@ small {
   margin-bottom: 23px;
 }
 .pet-action-grid > button {
-  font-size: 11px;
+  font-size: 12px;
 }
 .inline-form {
   display: flex;
@@ -1816,7 +1816,7 @@ small {
   margin: 18px 0 9px;
 }
 .pet-page .pills > button {
-  font-size: 11px;
+  font-size: 12px;
   padding: 7px 9px;
 }
 .pet-history {
@@ -1829,7 +1829,7 @@ small {
   gap: 10px;
   border-bottom: 1px dashed var(--line);
   padding: 13px 0;
-  color: #a49883;
+  color: var(--muted);
 }
 .pet-history small {
   margin-left: auto;
@@ -1876,9 +1876,9 @@ small {
   justify-content: space-between;
 }
 .quiz-options > button.selected {
-  background: #f0e5dc;
+  background: var(--rose-bg);
   border-color: #d6baa7;
-  color: #a4856d;
+  color: var(--ink);
 }
 .answer-reveal {
   border-top: 1px dashed var(--line);
@@ -1897,8 +1897,8 @@ small {
   border-radius: 8px;
 }
 .answer-reveal strong {
-  font-size: 11px;
-  color: #ac987b;
+  font-size: 12px;
+  color: var(--muted);
   display: block;
   margin-bottom: 5px;
 }
@@ -1949,16 +1949,16 @@ small {
   width: 100px;
   height: 100px;
   gap: 9px;
-  color: #b3917a;
+  color: var(--muted);
 }
 .wheel > div > span {
-  font-size: 11px;
+  font-size: 12px;
 }
 .wheel-pointer {
   position: absolute;
   top: 140px;
   left: calc(50% - 7px);
-  color: #ad7e69;
+  color: var(--muted);
   z-index: 1;
   font-size: 22px;
 }
@@ -1975,7 +1975,7 @@ small {
   align-items: center;
   flex-direction: column;
   gap: 15px;
-  color: #b28b71;
+  color: var(--muted);
 }
 .roulette-result strong {
   font-family: "Noto Serif SC", serif;
@@ -1999,13 +1999,13 @@ small {
   margin-bottom: 10px;
 }
 .plan-card > p {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   min-height: 42px;
 }
 .wish-priority {
-  font-size: 11px;
-  color: #a99878;
+  font-size: 12px;
+  color: var(--muted);
   background: #f5efdd;
   display: inline-block;
   padding: 5px 9px;
@@ -2026,22 +2026,22 @@ small {
   align-items: center;
   gap: 14px;
   margin-top: 22px;
-  color: #b19b7a;
+  color: var(--muted);
 }
 .plan-count strong {
   font-family: Georgia;
   font-size: 45px;
 }
 .plan-count span {
-  font-size: 11px;
+  font-size: 12px;
 }
 .date-details {
   display: flex;
   flex-direction: column;
   gap: 10px;
   margin-top: 20px;
-  font-size: 11px;
-  color: #a7987f;
+  font-size: 12px;
+  color: var(--muted);
 }
 .date-details > span {
   display: flex;
@@ -2068,8 +2068,8 @@ small {
   border: 1px solid var(--line);
   border-radius: 20px;
   padding: 7px 13px;
-  font-size: 11px;
-  color: #95a088;
+  font-size: 12px;
+  color: var(--muted);
   margin: 20px 0 15px;
 }
 .profile-counts {
@@ -2082,11 +2082,11 @@ small {
   display: block;
   font-family: Georgia;
   font-size: 28px;
-  color: #ab9472;
+  color: var(--muted);
 }
 .profile-counts span {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   margin-top: 9px;
 }
@@ -2115,7 +2115,7 @@ small {
   justify-content: center;
   width: 38px;
   height: 38px;
-  color: #b59b7b;
+  color: var(--muted);
   border-radius: 11px;
   background: #f2ecdf;
 }
@@ -2126,21 +2126,21 @@ small {
 .settings-row small {
   display: block;
   margin-top: 7px;
-  font-size: 11px;
+  font-size: 12px;
 }
 .profile-note {
   grid-column: 1/-1;
   text-align: center;
-  color: #b6ab95;
+  color: var(--muted);
   padding: 15px;
 }
 .profile-note p {
-  font-size: 11px;
+  font-size: 12px;
   margin: 12px 0;
 }
 .profile-note > span {
   font-family: Georgia;
-  font-size: 11px;
+  font-size: 12px;
   font-style: italic;
 }
 .overlay {
@@ -2172,7 +2172,7 @@ small {
   width: 640px;
 }
 .modal > .eyebrow {
-  font-size: 11px;
+  font-size: 12px;
 }
 .modal > h2 {
   font-size: 23px;
@@ -2186,7 +2186,7 @@ small {
   position: absolute;
   right: 19px;
   top: 18px;
-  color: #9c907d;
+  color: var(--muted);
 }
 .field {
   display: block;
@@ -2195,8 +2195,8 @@ small {
 }
 .field > span:first-child {
   display: block;
-  font-size: 11px;
-  color: #998b76;
+  font-size: 12px;
+  color: var(--muted);
   margin-bottom: 9px;
 }
 .editor-meta {
@@ -2216,11 +2216,11 @@ small {
   gap: 18px;
 }
 .editor-footer .fineprint {
-  font-size: 11px;
+  font-size: 12px;
   margin: 0;
 }
 .editor-footer .primary {
-  font-size: 11px;
+  font-size: 12px;
 }
 .photo-upload {
   border: 1px dashed var(--line);
@@ -2235,7 +2235,7 @@ small {
   color: var(--rose);
   cursor: pointer;
   flex-wrap: wrap;
-  font-size: 11px;
+  font-size: 12px;
   position: relative;
 }
 .upload-button > input {
@@ -2246,7 +2246,7 @@ small {
   cursor: pointer;
 }
 .upload-button > small {
-  font-size: 11px;
+  font-size: 12px;
   margin-left: auto;
 }
 .editor-photos {
@@ -2295,7 +2295,7 @@ small {
 }
 .detail-body {
   white-space: pre-wrap;
-  color: #847a6b;
+  color: var(--muted);
   font-size: 13px;
   line-height: 2.3;
   margin: 23px 0;
@@ -2324,8 +2324,8 @@ small {
   margin-bottom: 12px;
 }
 .comments > p > strong {
-  font-size: 11px;
-  color: #a89375;
+  font-size: 12px;
+  color: var(--muted);
   margin-right: 12px;
 }
 .comments .inline-form {
@@ -2338,7 +2338,7 @@ small {
   word-break: break-all;
   display: block;
   background: #f0ece1;
-  color: #9f8665;
+  color: var(--muted);
   border: 1px dashed #d2c4a9;
   border-radius: 9px;
   padding: 20px;
@@ -2356,15 +2356,15 @@ small {
   gap: 12px;
   border-bottom: 1px solid var(--line);
   padding: 15px 0;
-  color: #9e9b80;
+  color: var(--muted);
 }
 .device-list strong {
-  font-size: 11px;
+  font-size: 12px;
   display: block;
 }
 .device-list small {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   margin-top: 6px;
 }
 .trash-row {
@@ -2416,7 +2416,7 @@ small {
   justify-content: center;
   flex-direction: column;
   gap: 17px;
-  color: #b4a58d;
+  color: var(--muted);
   border: 1px dashed var(--line);
   border-radius: 14px;
   padding: 25px;
@@ -2429,15 +2429,15 @@ small {
 }
 .empty-state h3 {
   font-family: "Noto Serif SC", serif;
-  color: #8e816b;
+  color: var(--muted);
   font-size: 16px;
 }
 .empty-state p {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
 }
 details {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   margin: 20px 0;
 }
@@ -2448,8 +2448,8 @@ summary {
   background: #f1e6ce;
   padding: 13px 18px;
   border-radius: 8px;
-  color: #9b835d;
-  font-size: 11px;
+  color: var(--muted);
+  font-size: 12px;
   margin-bottom: 20px;
 }
 .welcome {
@@ -2476,11 +2476,11 @@ summary {
   color: #766c56;
 }
 .welcome-copy h1 > span {
-  color: #b68675;
+  color: var(--muted);
 }
 .welcome-copy > p {
   font-size: 12px;
-  color: #a49981;
+  color: var(--muted);
   letter-spacing: 1px;
   line-height: 2.4;
 }
@@ -2495,8 +2495,8 @@ summary {
   gap: 8px;
   align-items: center;
   justify-content: center;
-  font-size: 11px;
-  color: #aca087;
+  font-size: 12px;
+  color: var(--muted);
   margin: 20px 0 0;
 }
 .welcome-form {
@@ -2506,7 +2506,7 @@ summary {
   justify-content: center;
 }
 .welcome-form .flower {
-  color: #baa980;
+  color: var(--muted);
   stroke-width: 1.1;
   margin-bottom: 30px;
 }
@@ -2524,7 +2524,7 @@ summary {
 }
 .welcome-form .fineprint {
   line-height: 2;
-  font-size: 11px;
+  font-size: 12px;
   display: block;
   text-align: center;
   margin-top: 20px;
@@ -2536,8 +2536,8 @@ summary {
   border-top: 1px dashed var(--line);
   padding-top: 24px;
   margin-top: 45px;
-  color: #b1a38a;
-  font-size: 11px;
+  color: var(--muted);
+  font-size: 12px;
   line-height: 2;
 }
 .welcome-note svg {
@@ -2564,7 +2564,7 @@ summary {
   --paper: #2c302a;
   --bg: #242923;
   --ink: #d8d7ca;
-  --muted: #a3a493;
+  --muted: #b9bbac;
   --rose: #e2b8ac;
   --on-rose: #302723;
   --green: #bbccad;
@@ -2591,7 +2591,7 @@ summary {
 [data-theme="dark"] .quick-icon,
 [data-theme="dark"] .nav-item.active,
 [data-theme="dark"] .pills > button.selected {
-  background: #474639;
+  background: var(--rose-bg);
 }
 [data-theme="dark"] .daily-prompt {
   background: #343b2d;
@@ -2647,12 +2647,12 @@ summary {
     font-size: 13px;
   }
   .memory-copy p {
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.9;
     min-height: 41px;
   }
   .memory-copy .meta {
-    font-size: 11px;
+    font-size: 12px;
   }
   .quick-actions > button {
     padding: 21px 20px;
@@ -2661,7 +2661,7 @@ summary {
     font-size: 12px;
   }
   .quick-actions small {
-    font-size: 11px;
+    font-size: 12px;
   }
   .mood-card {
     padding: 26px;
@@ -2673,7 +2673,7 @@ summary {
     font-size: 12px;
   }
   .mood-bubble {
-    font-size: 11px;
+    font-size: 12px;
   }
   .mood-card .soft-note {
     margin-top: 10px;
@@ -2698,7 +2698,7 @@ summary {
     font-size: 13px;
   }
   .brand small {
-    font-size: 6px;
+    font-size: 12px;
   }
   .content {
     padding: 26px 25px 0;
@@ -2722,10 +2722,10 @@ summary {
     display: none;
   }
   .quick-actions small {
-    font-size: 7px;
+    font-size: 12px;
   }
   .quick-actions strong {
-    font-size: 11px;
+    font-size: 12px;
   }
   .quick-icon {
     height: 31px;
@@ -2748,10 +2748,10 @@ summary {
     padding: 12px;
   }
   .memory-copy h3 {
-    font-size: 11px;
+    font-size: 12px;
   }
   .memory-copy p {
-    font-size: 11px;
+    font-size: 12px;
   }
   .pet-illustration {
     height: 232px;
@@ -2768,7 +2768,7 @@ summary {
   }
   .pills > button {
     padding: 9px 11px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .pet-page {
     grid-template-columns: 1fr 1fr;
@@ -2804,13 +2804,13 @@ summary {
     font-size: 40px;
   }
   .brand > div {
-    font-size: 11px;
+    font-size: 12px;
   }
   .brand small {
-    font-size: 5px;
+    font-size: 12px;
   }
   .nav-item {
-    font-size: 11px;
+    font-size: 12px;
     padding: 13px;
     gap: 11px;
   }
@@ -2847,7 +2847,7 @@ summary {
     display: none;
   }
   .mood-row strong .tiny {
-    font-size: 7px;
+    font-size: 12px;
   }
   .home-bottom {
     grid-template-columns: 1fr;
@@ -2863,10 +2863,10 @@ summary {
     padding: 17px 15px;
   }
   .quick-actions strong {
-    font-size: 11px;
+    font-size: 12px;
   }
   .quick-actions small {
-    font-size: 11px;
+    font-size: 12px;
   }
   .quick-icon {
     width: 37px;
@@ -2880,7 +2880,7 @@ summary {
     font-size: 12px;
   }
   .memory-copy p {
-    font-size: 11px;
+    font-size: 12px;
   }
   .daily-prompt {
     padding: 15px;
@@ -2895,7 +2895,7 @@ summary {
     height: 19px;
   }
   .daily-prompt p {
-    font-size: 11px;
+    font-size: 12px;
   }
   .ai-layout,
   .map-layout,
@@ -2919,10 +2919,10 @@ summary {
     font-size: 20px;
   }
   .pet-page-heading p {
-    font-size: 11px;
+    font-size: 12px;
   }
   .pet-page-heading .eyebrow {
-    font-size: 7px;
+    font-size: 12px;
   }
   .profile-card {
     padding: 30px;
@@ -2945,7 +2945,7 @@ summary {
     font-size: 20px;
   }
   .feature-banner p {
-    font-size: 11px;
+    font-size: 12px;
   }
   .feature-banner > svg {
     width: 42px;
@@ -2964,7 +2964,7 @@ summary {
     margin-bottom: 70px;
   }
   .welcome-copy > p {
-    font-size: 11px;
+    font-size: 12px;
   }
   .welcome-copy > img {
     height: 230px;
@@ -2976,7 +2976,7 @@ summary {
     padding: 60px 9%;
   }
   .private-label {
-    font-size: 11px;
+    font-size: 12px;
   }
   .top-actions {
     gap: 6px;
@@ -3001,14 +3001,14 @@ summary {
     padding: 0 20px;
   }
   .breadcrumb {
-    font-size: 11px;
+    font-size: 12px;
     gap: 8px;
   }
   .top-actions {
     gap: 4px;
   }
   .private-label {
-    font-size: 11px;
+    font-size: 12px;
     margin-right: 0;
   }
   .top-actions .small {
@@ -3021,7 +3021,7 @@ summary {
     margin-bottom: 22px;
   }
   .page-heading .eyebrow {
-    font-size: 7px;
+    font-size: 12px;
     letter-spacing: 1.5px;
   }
   .page-heading h1 {
@@ -3034,7 +3034,7 @@ summary {
     margin-left: 8px;
   }
   .page-heading > div > p {
-    font-size: 11px;
+    font-size: 12px;
   }
   .home-top {
     gap: 16px;
@@ -3048,7 +3048,7 @@ summary {
   }
   .hero-since {
     display: block;
-    font-size: 11px;
+    font-size: 12px;
   }
   .hero-doodle {
     left: -55px;
@@ -3059,11 +3059,11 @@ summary {
     font-size: 65px;
   }
   .together-number > i {
-    font-size: 11px;
+    font-size: 12px;
     left: calc(100% + 8px);
   }
   .hero-bottom {
-    font-size: 7px;
+    font-size: 12px;
     margin-top: 18px;
     padding: 12px 0;
   }
@@ -3078,16 +3078,16 @@ summary {
   .mood-row .avatar {
     height: 29px;
     width: 29px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .mood-row strong {
-    font-size: 11px;
+    font-size: 12px;
   }
   .mood-row strong .tiny {
     display: none;
   }
   .mood-bubble {
-    font-size: 11px;
+    font-size: 12px;
     padding: 6px 8px;
     gap: 6px;
   }
@@ -3103,10 +3103,10 @@ summary {
     gap: 10px;
   }
   .quick-actions strong {
-    font-size: 11px;
+    font-size: 12px;
   }
   .quick-actions small {
-    font-size: 11px;
+    font-size: 12px;
   }
   .quick-icon {
     width: 32px;
@@ -3124,7 +3124,7 @@ summary {
     padding: 11px 12px 15px;
   }
   .memory-copy h3 {
-    font-size: 11px;
+    font-size: 12px;
     white-space: normal;
     min-height: 36px;
     line-height: 1.8;
@@ -3134,23 +3134,23 @@ summary {
     -webkit-box-orient: vertical;
   }
   .memory-copy p {
-    font-size: 11px;
+    font-size: 12px;
     min-height: 29px;
     line-height: 1.8;
   }
   .meta {
-    font-size: 7px;
+    font-size: 12px;
     margin-bottom: 8px;
   }
   .meta > span:last-child {
-    font-size: 6px;
+    font-size: 12px;
   }
   .tags {
     gap: 5px;
     margin-top: 9px;
   }
   .tags > span {
-    font-size: 7px;
+    font-size: 12px;
     padding: 3px 4px;
   }
   .memory-heart {
@@ -3165,10 +3165,10 @@ summary {
     font-size: 13px;
   }
   .section-title .text-button {
-    font-size: 11px;
+    font-size: 12px;
   }
   .home-tip {
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0;
     margin-top: 13px;
   }
@@ -3178,10 +3178,10 @@ summary {
     gap: 12px;
   }
   .daily-prompt .eyebrow {
-    font-size: 6px;
+    font-size: 12px;
   }
   .daily-prompt p {
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.8;
     margin-top: 4px;
   }
@@ -3199,14 +3199,14 @@ summary {
   .app-footer {
     margin-top: 24px;
     padding: 19px 0 22px;
-    font-size: 7px;
+    font-size: 12px;
     gap: 13px;
   }
   .app-footer > span:first-child {
     max-width: 190px;
   }
   .app-footer > span:last-child {
-    font-size: 6px;
+    font-size: 12px;
     gap: 5px;
     white-space: nowrap;
   }
@@ -3230,11 +3230,11 @@ summary {
     flex-direction: column;
     gap: 6px;
     width: 20%;
-    color: #b2aa9b;
-    font-size: 11px;
+    color: var(--muted);
+    font-size: 12px;
   }
   .mobile-nav > button.active {
-    color: #ae8070;
+    color: var(--ink);
   }
   .mobile-nav > button.active:before {
     content: "";
@@ -3242,7 +3242,7 @@ summary {
     top: 0;
     height: 2px;
     width: 20px;
-    background: #bd9783;
+    background: var(--rose-bg);
     border-radius: 3px;
   }
   .mobile-nav svg {
@@ -3255,7 +3255,7 @@ summary {
     align-items: center;
   }
   .toolbar > .primary {
-    font-size: 11px;
+    font-size: 12px;
     padding: 10px 13px;
     min-height: 35px;
     margin-left: auto;
@@ -3265,7 +3265,7 @@ summary {
   }
   .pills > button {
     padding: 9px 11px;
-    font-size: 11px;
+    font-size: 12px;
     border-radius: 7px;
   }
   .toolbar > .pills {
@@ -3277,7 +3277,7 @@ summary {
     gap: 13px;
   }
   .pills.small > button {
-    font-size: 11px;
+    font-size: 12px;
     padding: 7px 10px;
   }
   .search {
@@ -3292,7 +3292,7 @@ summary {
     margin-top: 13px;
   }
   .filter-detail label {
-    font-size: 11px;
+    font-size: 12px;
     gap: 5px;
   }
   .filter-detail input {
@@ -3306,7 +3306,7 @@ summary {
     flex: 1;
   }
   .filter-detail > .text-button {
-    font-size: 11px;
+    font-size: 12px;
   }
   .timeline-grid {
     gap: 14px;
@@ -3322,7 +3322,7 @@ summary {
     border-radius: 12px;
   }
   .feature-banner > .eyebrow {
-    font-size: 6px;
+    font-size: 12px;
   }
   .feature-banner h2 {
     font-size: 18px;
@@ -3331,14 +3331,14 @@ summary {
     margin: 7px 0;
   }
   .feature-banner p {
-    font-size: 11px;
+    font-size: 12px;
   }
   .feature-banner > svg {
     width: 32px;
     height: 42px;
   }
   .feature-banner .eyebrow {
-    font-size: 6px;
+    font-size: 12px;
     letter-spacing: 1px;
   }
   .map-count {
@@ -3365,10 +3365,10 @@ summary {
     margin-bottom: 9px;
   }
   .polaroid > span {
-    font-size: 11px;
+    font-size: 12px;
   }
   .polaroid > small {
-    font-size: 11px;
+    font-size: 12px;
     margin-top: 5px;
   }
   .map-layout {
@@ -3378,7 +3378,7 @@ summary {
     min-height: 320px;
   }
   .map-privacy p {
-    font-size: 11px;
+    font-size: 12px;
   }
   .place-row {
     padding: 17px 0;
@@ -3396,7 +3396,7 @@ summary {
     font-size: 23px;
   }
   .report-cover p {
-    font-size: 11px;
+    font-size: 12px;
   }
   .stats-grid {
     gap: 10px;
@@ -3409,10 +3409,10 @@ summary {
     font-size: 28px;
   }
   .stats-grid span {
-    font-size: 11px;
+    font-size: 12px;
   }
   .report-page .section-title .tiny {
-    font-size: 7px;
+    font-size: 12px;
   }
   .report-actions {
     gap: 10px;
@@ -3420,11 +3420,11 @@ summary {
   }
   .report-actions .primary,
   .report-actions .secondary {
-    font-size: 11px;
+    font-size: 12px;
     padding: 10px 12px;
   }
   .report-actions .text-button {
-    font-size: 11px;
+    font-size: 12px;
   }
   .game-grid {
     gap: 13px;
@@ -3446,11 +3446,11 @@ summary {
     margin-bottom: 10px;
   }
   .game-card p {
-    font-size: 11px;
+    font-size: 12px;
     min-height: 50px;
   }
   .game-card > span:last-child {
-    font-size: 11px;
+    font-size: 12px;
     margin-top: 19px;
     padding-top: 12px;
   }
@@ -3473,7 +3473,7 @@ summary {
     padding: 70px 10px 5px;
   }
   .pet-level {
-    font-size: 11px;
+    font-size: 12px;
     bottom: 15px;
   }
   .pet-page {
@@ -3490,10 +3490,10 @@ summary {
     font-size: 19px;
   }
   .question-page > .eyebrow {
-    font-size: 7px;
+    font-size: 12px;
   }
   .question-page > .muted {
-    font-size: 11px;
+    font-size: 12px;
   }
   .question-decoration {
     margin: 23px 0 15px;
@@ -3502,14 +3502,14 @@ summary {
     gap: 17px;
   }
   .question-actions button {
-    font-size: 11px;
+    font-size: 12px;
   }
   .quiz-options {
     gap: 12px;
   }
   .quiz-options > button {
     padding: 14px 12px;
-    font-size: 11px;
+    font-size: 12px;
     line-height: 1.8;
     text-align: left;
   }
@@ -3517,7 +3517,7 @@ summary {
     font-size: 20px;
   }
   .roulette-card .eyebrow {
-    font-size: 7px;
+    font-size: 12px;
   }
   .wheel {
     height: 220px;
@@ -3534,17 +3534,17 @@ summary {
     margin: 17px 0 12px;
   }
   .profile-card > .muted {
-    font-size: 11px;
+    font-size: 12px;
   }
   .settings-row {
     padding: 19px 0;
     gap: 13px;
   }
   .settings-row strong {
-    font-size: 11px;
+    font-size: 12px;
   }
   .settings-row small {
-    font-size: 11px;
+    font-size: 12px;
   }
   .settings-icon {
     height: 34px;
@@ -3555,7 +3555,7 @@ summary {
     height: 18px;
   }
   .profile-note p {
-    font-size: 11px;
+    font-size: 12px;
   }
   .overlay {
     padding: 12px;
@@ -3570,10 +3570,10 @@ summary {
     font-size: 21px;
   }
   .modal > .eyebrow {
-    font-size: 7px;
+    font-size: 12px;
   }
   .modal > .muted {
-    font-size: 11px;
+    font-size: 12px;
   }
   .modal .close {
     right: 13px;
@@ -3583,7 +3583,7 @@ summary {
     margin: 18px 0;
   }
   .field > span:first-child {
-    font-size: 11px;
+    font-size: 12px;
   }
   .field > input,
   .field > select {
@@ -3606,7 +3606,7 @@ summary {
   }
   .upload-button > small {
     width: 100%;
-    font-size: 11px;
+    font-size: 12px;
     margin-left: 0;
   }
   .detail-body {
@@ -3617,11 +3617,11 @@ summary {
   }
   .detail-actions .secondary,
   .detail-actions .text-button {
-    font-size: 11px;
+    font-size: 12px;
   }
   .recovery-code {
     padding: 15px;
-    font-size: 11px;
+    font-size: 12px;
     letter-spacing: 0.5px;
   }
   .welcome {
@@ -3641,14 +3641,14 @@ summary {
     font-size: 14px;
   }
   .welcome-art .brand small {
-    font-size: 7px;
+    font-size: 12px;
   }
   .welcome-copy {
     position: relative;
     padding-bottom: 6px;
   }
   .welcome-copy > .eyebrow {
-    font-size: 6px;
+    font-size: 12px;
     letter-spacing: 1.4px;
   }
   .welcome-copy h1 {
@@ -3659,7 +3659,7 @@ summary {
     z-index: 1;
   }
   .welcome-copy p {
-    font-size: 11px;
+    font-size: 12px;
     line-height: 2.3;
     position: relative;
     z-index: 1;
@@ -3675,7 +3675,7 @@ summary {
   }
   .welcome-foot {
     justify-content: flex-start;
-    font-size: 11px;
+    font-size: 12px;
     margin-top: 15px;
   }
   .welcome-foot svg {
@@ -3694,7 +3694,7 @@ summary {
     margin-bottom: 12px;
   }
   .welcome-form > .muted {
-    font-size: 11px;
+    font-size: 12px;
     margin-bottom: 13px;
   }
   .welcome-form > .primary,
@@ -3703,17 +3703,17 @@ summary {
     font-size: 12px;
   }
   .welcome-form .fineprint {
-    font-size: 11px;
+    font-size: 12px;
     margin-top: 17px;
   }
   .welcome-note {
     margin-top: 25px;
     padding-top: 20px;
-    font-size: 11px;
+    font-size: 12px;
   }
   .toast {
     bottom: 82px;
-    font-size: 11px;
+    font-size: 12px;
     padding: 12px 18px;
     max-width: 90vw;
     width: max-content;
@@ -3725,7 +3725,7 @@ summary {
     font-size: 14px;
   }
   .empty-state p {
-    font-size: 11px;
+    font-size: 12px;
   }
 }
 @media print {
@@ -3791,10 +3791,10 @@ summary {
     font-size: 12px;
   }
   .meta {
-    font-size: 11px;
+    font-size: 12px;
   }
   .meta > span:last-child {
-    font-size: 11px;
+    font-size: 12px;
   }
 }
 /* A little more paper, a little more room to read. */
@@ -3950,7 +3950,7 @@ summary {
 }
 .topic-note > span,
 .topic-note > p {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   line-height: 1.8;
 }
@@ -3980,7 +3980,7 @@ summary {
 }
 .motion-preference small {
   display: block;
-  font-size: 11px;
+  font-size: 12px;
   color: var(--muted);
   margin-top: 6px;
 }
@@ -4097,4 +4097,64 @@ summary {
 }
 .wheel > div {
   transition: transform 1.5s cubic-bezier(0.15, 0.9, 0.2, 1);
+}
+:root {
+  font-size: 15px;
+}
+.detail-body {
+  font-size: 16px;
+  line-height: 1.9;
+  color: var(--ink);
+}
+.memory-copy p {
+  font-size: 15px;
+  line-height: 1.85;
+  color: var(--muted);
+}
+.closing-notice {
+  padding: 20px;
+  margin-bottom: 24px;
+  border: 1px solid var(--rose);
+  border-radius: 14px;
+  background: var(--rose-bg);
+  line-height: 1.8;
+}
+.closing-notice h2 {
+  font-size: 18px;
+  margin: 0 0 10px;
+}
+.closing-notice p {
+  font-size: 14px;
+  margin: 0 0 16px;
+}
+.closing-notice button {
+  margin-right: 14px;
+  min-height: 44px;
+}
+.demo-session-ended {
+  font-size: 15px;
+  line-height: 1.9;
+}
+.text-cover > p {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-height: 5.4em;
+  line-height: 1.8;
+}
+@media (max-width: 600px) {
+  .memory-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .text-cover {
+    padding: 22px;
+  }
+  .hero-bottom {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .hero-bottom > span:first-child {
+    white-space: nowrap;
+  }
 }

@@ -8,7 +8,8 @@ export function validatePublicConfig(value) {
     throw new Error("配置必须是 JSON 对象");
   if (
     Object.keys(value).some(
-      (key) => !["appid", "cloudEnv", "cloudFunction"].includes(key),
+      (key) =>
+        !["appid", "cloudEnv", "devCloudEnv", "cloudFunction"].includes(key),
     )
   )
     throw new Error("这里只接受 AppID、环境 ID 和函数名，不接受密钥或其他字段");
@@ -22,13 +23,27 @@ export function validatePublicConfig(value) {
     !/^[A-Za-z0-9][A-Za-z0-9_-]{2,79}$/.test(value.cloudEnv)
   )
     throw new Error("CloudBase 环境 ID 格式不正确");
+  const devCloudEnv = value.devCloudEnv || "";
+  if (
+    typeof devCloudEnv !== "string" ||
+    (devCloudEnv !== "" &&
+      !/^[A-Za-z0-9][A-Za-z0-9_-]{2,79}$/.test(devCloudEnv))
+  )
+    throw new Error("开发环境 ID 格式不正确");
+  if (devCloudEnv && devCloudEnv === value.cloudEnv)
+    throw new Error("开发环境不能与正式环境相同");
   const cloudFunction = value.cloudFunction || "usApi";
   if (
     typeof cloudFunction !== "string" ||
     !/^[A-Za-z][A-Za-z0-9_-]{0,59}$/.test(cloudFunction)
   )
     throw new Error("云函数名称格式不正确");
-  return { appid: value.appid, cloudEnv: value.cloudEnv, cloudFunction };
+  return {
+    appid: value.appid,
+    cloudEnv: value.cloudEnv,
+    devCloudEnv,
+    cloudFunction,
+  };
 }
 export async function configureProject(root, value) {
   const config = validatePublicConfig(value);
@@ -46,7 +61,11 @@ export async function configureProject(root, value) {
       clientTemp,
       "// Public deployment identifiers only. Never store secrets here.\nexport const config = " +
         JSON.stringify(
-          { cloudEnv: config.cloudEnv, cloudFunction: config.cloudFunction },
+          {
+            cloudEnv: config.cloudEnv,
+            devCloudEnv: config.devCloudEnv,
+            cloudFunction: config.cloudFunction,
+          },
           null,
           2,
         ) +
@@ -68,11 +87,17 @@ export async function configureProject(root, value) {
 }
 async function main() {
   const args = process.argv.slice(2);
-  const allowed = new Set(["--appid", "--env", "--function", "--file"]);
+  const allowed = new Set([
+    "--appid",
+    "--env",
+    "--dev-env",
+    "--function",
+    "--file",
+  ]);
   const options = {};
   if (!args.length || args.includes("--help")) {
     console.log(
-      "用法：npm run configure -- --appid wx0123456789abcdef --env 你的环境ID\n或：npm run configure -- --file config/deployment.local.json\n仅接收公开配置；不会登录、创建云资源或部署。",
+      "用法：npm run configure -- --appid wx0123456789abcdef --env 你的正式环境ID [--dev-env 开发环境ID]\n或：npm run configure -- --file config/deployment.local.json\n仅接收公开配置；不会登录、创建云资源或部署。",
     );
     return;
   }
@@ -98,6 +123,7 @@ async function main() {
     value = {
       appid: options["--appid"],
       cloudEnv: options["--env"],
+      devCloudEnv: options["--dev-env"] || "",
       cloudFunction: options["--function"] || "usApi",
     };
   await configureProject(

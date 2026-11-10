@@ -11,13 +11,21 @@ import vm from "node:vm";
 import { resolve, dirname } from "node:path";
 import { createHash } from "node:crypto";
 import { validateWxml } from "./wxml-check.mjs";
+import { validateWxss } from "./wxss-check.mjs";
 const app = JSON.parse(await readFile("miniprogram/app.json", "utf8"));
 const config = JSON.parse(await readFile("project.config.json", "utf8"));
+assert.equal(config.setting.es6, false, "Keep esbuild ES2020 output; secondary transforms break BigInt exponentiation");
+assert.equal(config.setting.enhance, false, "Do not rewrite BigInt exponentiation to Math.pow");
 assert.equal(app.tabBar.list.length, 5);
 for (const p of app.pages)
   for (const suffix of [".json", ".wxml", ".js"])
     await access(resolve(config.miniprogramRoot, p + suffix));
 const template = await readFile("miniprogram/templates/screen.wxml", "utf8");
+assert.deepEqual(
+  validateWxss(await readFile("miniprogram/app.wxss", "utf8"), "app.wxss"),
+  [],
+  "WXSS selector checks failed",
+);
 assert.deepEqual(
   validateWxml(template, "screen.wxml"),
   [],

@@ -16,12 +16,41 @@ describe("公开部署配置", () => {
     ).toEqual({
       appid: "wx0123456789abcdef",
       cloudEnv: "cloud-fixture-123",
+      devCloudEnv: "",
       cloudFunction: "usApi",
     });
     for (const appid of ["touristappid", "wx-not-valid", "wx0123456789abcdeg"])
       expect(() =>
         validatePublicConfig({ appid, cloudEnv: "cloud-fixture" }),
       ).toThrow();
+  });
+  it("接受独立的开发环境 ID，拒绝与正式环境相同", () => {
+    expect(
+      validatePublicConfig({
+        appid: "wx0123456789abcdef",
+        cloudEnv: "prod-env-123",
+        devCloudEnv: "dev-env-123",
+      }),
+    ).toEqual({
+      appid: "wx0123456789abcdef",
+      cloudEnv: "prod-env-123",
+      devCloudEnv: "dev-env-123",
+      cloudFunction: "usApi",
+    });
+    expect(() =>
+      validatePublicConfig({
+        appid: "wx0123456789abcdef",
+        cloudEnv: "same-env",
+        devCloudEnv: "same-env",
+      }),
+    ).toThrow(/不能与正式环境相同/);
+    expect(() =>
+      validatePublicConfig({
+        appid: "wx0123456789abcdef",
+        cloudEnv: "prod-env",
+        devCloudEnv: "bad env",
+      }),
+    ).toThrow(/开发环境/);
   });
   it("拒绝密钥字段和可注入代码的环境值，异常不打印敏感值", () => {
     const secret = "fixture-secret-that-must-not-be-printed";
@@ -82,6 +111,7 @@ describe("公开部署配置", () => {
     await configureProject(root, {
       appid: "wx0123456789abcdef",
       cloudEnv: "cloud-fixture-123",
+      devCloudEnv: "cloud-dev-123",
     });
     const actual = JSON.parse(
       await readFile(join(root, "project.config.json"), "utf8"),
@@ -91,8 +121,11 @@ describe("公开部署配置", () => {
       setting: { es6: true },
       projectname: "keep-name",
     });
-    expect(
-      await readFile(join(root, "miniprogram/config.ts"), "utf8"),
-    ).toContain("cloud-fixture-123");
+    const clientConfig = await readFile(
+      join(root, "miniprogram/config.ts"),
+      "utf8",
+    );
+    expect(clientConfig).toContain("cloud-fixture-123");
+    expect(clientConfig).toContain("cloud-dev-123");
   });
 });

@@ -9,6 +9,19 @@ foreach ($item in $readiness.outputSha256.PSObject.Properties) {
   $actual = (Get-FileHash -LiteralPath (Join-Path $projectRoot $item.Name) -Algorithm SHA256).Hash.ToLowerInvariant()
   if ($actual -ne $item.Value) { throw "Build output changed after preflight: $($item.Name)" }
 }
+$webManifest = Get-Content -LiteralPath (Join-Path $projectRoot 'dist/.vite/manifest.json') -Raw | ConvertFrom-Json -AsHashtable
+$webFiles = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::OrdinalIgnoreCase)
+[void]$webFiles.Add('dist/index.html')
+[void]$webFiles.Add('dist/.vite/manifest.json')
+foreach ($entry in $webManifest.Values) {
+  foreach ($asset in @($entry.file) + @($entry.css) + @($entry.assets)) {
+    if (-not $asset) { continue }
+    $asset = $asset.Replace('\', '/')
+    $assetPath = [System.IO.Path]::GetFullPath((Join-Path $projectRoot ('dist/' + $asset)))
+    if (($asset.Split('/') -contains '..') -or -not $assetPath.StartsWith((Join-Path $projectRoot 'dist') + '\', [System.StringComparison]::OrdinalIgnoreCase)) { throw 'Invalid browser manifest path' }
+    [void]$webFiles.Add('dist/' + $asset)
+  }
+}
 $releaseDirectory = Join-Path $projectRoot 'release'
 New-Item -ItemType Directory -Path $releaseDirectory -Force | Out-Null
 $archivePath = Join-Path $releaseDirectory "Us-little-world-$version.zip"
@@ -21,6 +34,7 @@ try {
   foreach ($path in [System.IO.Directory]::EnumerateFiles($projectRoot, '*', [System.IO.SearchOption]::AllDirectories)) {
     $relative = [System.IO.Path]::GetRelativePath($projectRoot, $path).Replace('\', '/')
     if ($relative -match '(^|/)(node_modules|\.git|artifacts|release|coverage)/' -or $relative -match '(^|/)\.env' -or $relative -match '(^|/)project\.private\.config\.json$' -or $relative -match '(\.local\.json|\.log|\.tmp)$') { continue }
+    if ($relative.StartsWith('dist/') -and -not $webFiles.Contains($relative) -and -not (Test-Path -LiteralPath (Join-Path $projectRoot ('public/' + $relative.Substring(5))) -PathType Leaf)) { continue }
     [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $path, $relative, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
     $count++
   }

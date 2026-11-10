@@ -149,6 +149,8 @@ describe("端到端加密与密钥", () => {
   it("密钥包签名不依赖数据库对象字段顺序", async () => {
     const a = await identity("alice");
     const b = await identity("bob");
+    // Isolate signature ordering from the separate known-key conflict check.
+    b.spaceKeys = {};
     const t = await createTransfer(
       a,
       b.deviceId,
@@ -477,13 +479,18 @@ describe("云端权限、并发与客户端集成", () => {
       true,
     );
   });
-  it("关闭空间后双方立即失去云端读写权限", async () => {
+  it("关闭冷静期内双方只读，任一成员可撤销关闭", async () => {
     const { a, b } = await setup();
-    await a.call("closeSpace");
-    await expect(b.refresh()).rejects.toMatchObject({
-      code: "MEMBER_REQUIRED",
-    });
-    await expect(a.refresh()).rejects.toThrow();
+    await a.closeSpace();
+    await b.closeSpace();
+    await b.refresh();
+    expect(b.space?.status).toBe("closing");
+    await expect(
+      b.save({ kind: "memory", title: "冷静期不可新增", date: "2026-11-01" }),
+    ).rejects.toMatchObject({ code: "SPACE_CLOSING" });
+    await b.cancelClose();
+    await a.refresh();
+    expect(a.space?.status).toBe("active");
   });
   it("AI 缺少一次性授权不能调用，未配置服务不会伪造 AI 结果", async () => {
     const { a } = await setup();
@@ -493,7 +500,7 @@ describe("云端权限、并发与客户端集成", () => {
     await expect(
       a.call("aiGenerate", {
         text: "测试",
-        task: "整理",
+        taskId: "story",
         consent: true,
         consentAt: 1800000000000,
       }),
@@ -503,7 +510,7 @@ describe("云端权限、并发与客户端集成", () => {
       "private",
     );
     await expect(
-      a.ai([privateEntry.id], Date.now(), "整理"),
+      a.ai([privateEntry.id], Date.now(), "story"),
     ).rejects.toMatchObject({ code: "INVALID_SELECTION" });
   });
 });

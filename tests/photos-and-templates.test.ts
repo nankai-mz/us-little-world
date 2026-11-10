@@ -8,6 +8,7 @@ import {
 import { prepareNativePhoto } from "../miniprogram/media";
 import { entryView, navigationTitle } from "../miniprogram/presentation";
 import { validateWxml } from "../scripts/wxml-check.mjs";
+import { validateWxss } from "../scripts/wxss-check.mjs";
 import type { Entry } from "../src/core/types";
 
 afterEach(() => vi.unstubAllGlobals());
@@ -136,6 +137,14 @@ describe("原生模板与视图数据合同", () => {
     ).toEqual([]);
     expect(validateWxml("<view><text></view>")).not.toEqual([]);
     expect(validateWxml('<view hidden="false"/>')).not.toEqual([]);
+    expect(validateWxml('<view wx:if="{{ready &amp;&amp; detail}}"/>')).not.toEqual([]);
+    expect(validateWxml('<view wx:if="{{count &lt; 2}}"/>')).not.toEqual([]);
+    expect(validateWxml('<view wx:if="{{ready && count < 2}}"/>')).toEqual([]);
+  });
+  it("拒绝微信编译器不接受的通配选择器，保留按组件减少动效", () => {
+    expect(validateWxss('.reduced-motion * { animation: none; }')).not.toEqual([]);
+    expect(validateWxss('@media (prefers-reduced-motion: reduce) { .page *::before { animation: none; } }')).not.toEqual([]);
+    expect(validateWxss('/* * is not a selector here */ .page view, .page image { animation: none; transition: none; }')).toEqual([]);
   });
   it("封面路径和照片列表只进入视图，保持原加密载荷不被添加界面字段", () => {
     const entry = {

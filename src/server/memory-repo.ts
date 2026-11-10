@@ -47,9 +47,10 @@ export class MemoryRepository implements Repository {
     limit: number,
   ) {
     return structuredClone(
-      Object.values(
+      Object.entries(
         Object.prototype.hasOwnProperty.call(this.data, c) ? this.data[c] : {},
       )
+        .map(([id, row]) => ({ ...row, id: row.id || id }))
         .filter((r) => Object.entries(where).every(([k, v]) => r[k] === v))
         .sort(
           (a, b) =>

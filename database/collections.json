@@ -8,12 +8,21 @@
     "key_envelopes",
     "encrypted_records",
     "encrypted_files",
-    "ai_limits"
+    "ai_limits",
+    "maintenance_state"
   ],
   "indexes": [
     { "collection": "devices", "fields": ["spaceId", "status", "_id"] },
-    { "collection": "key_envelopes", "fields": ["spaceId", "toDevice", "_id"] },
-    { "collection": "encrypted_records", "fields": ["spaceId", "_id"] }
+    {
+      "collection": "key_envelopes",
+      "fields": ["spaceId", "toDevice", "keyVersion", "_id"]
+    },
+    { "collection": "key_envelopes", "fields": ["spaceId", "_id"] },
+    { "collection": "encrypted_records", "fields": ["spaceId", "_id"] },
+    { "collection": "encrypted_files", "fields": ["spaceId", "_id"] },
+    { "collection": "devices", "fields": ["spaceId", "_id"] },
+    { "collection": "invitations", "fields": ["spaceId", "_id"] },
+    { "collection": "ai_limits", "fields": ["spaceId", "_id"] }
   ],
   "note": "Collection/index checklist, not a CloudBase CLI deployment manifest. See docs/DEPLOYMENT.md."
 }

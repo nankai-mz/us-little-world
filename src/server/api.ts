@@ -7,6 +7,18 @@ import {
   type ApiReply,
 } from "../core/types";
 import { API_PROTOCOL, APP_VERSION } from "../core/protocol";
+import {
+  AI_TASKS,
+  AI_TEXT_LIMIT,
+  AI_SPACE_DAILY_LIMIT,
+  AI_GLOBAL_DAILY_LIMIT,
+} from "../core/ai";
+import {
+  availableBinding,
+  readableSpace,
+  CLOSING_GRACE_MS,
+  TRANSFER_TTL_MS,
+} from "./lifecycle";
 export interface Tx {
   get(collection: string, id: string): Promise<any>;
   put(collection: string, id: string, value: any): Promise<void>;
@@ -31,6 +43,7 @@ export interface ServerDeps {
   fileGet?: (fileId: string) => Promise<string>;
   fileDelete?: (fileId: string) => Promise<void>;
   runtime?: { mode: "cloud" | "local"; sdkVersion?: string };
+  aiLimits?: { spaceDaily: number; globalDaily: number };
 }
 function ensure(ok: unknown, code: string, msg: string): asserts ok {
   if (!ok) throw new AppError(code, msg);
@@ -81,10 +94,18 @@ export function validateEnvelope(v: any): Envelope {
     ciphertext,
   };
 }
-async function member(tx: Tx, spaceId: string, userId: string): Promise<Space> {
+async function member(
+  tx: Tx,
+  spaceId: string,
+  userId: string,
+  readOnly = false,
+  at = Date.now(),
+): Promise<Space> {
   const s = await tx.get("spaces", id(spaceId));
   ensure(
-    s && s.status === "active" && s.members.includes(userId),
+    s &&
+      (readOnly ? readableSpace(s, at) : s.status === "active") &&
+      s.members.includes(userId),
     "MEMBER_REQUIRED",
     "当前账号不能访问这个空间",
   );
@@ -124,6 +145,16 @@ export function createApi(deps: ServerDeps) {
         "接口名称不正确",
       );
       let result: any;
+      if (
+        ["closeSpace", "cancelClose", "aiGenerate", "ackTransfer"].includes(
+          action,
+        )
+      )
+        ensure(
+          input.apiProtocol === API_PROTOCOL,
+          "PROTOCOL_MISMATCH",
+          "请同时更新小程序与云函数，再执行此操作",
+        );
       if (action === "health") {
         result = {
           appVersion: APP_VERSION,
@@ -135,15 +166,29 @@ export function createApi(deps: ServerDeps) {
           sdkPrerelease: /-/.test(deps.runtime?.sdkVersion || ""),
         };
       } else if (action === "bootstrap") {
-        const u = await repo.get("users", userId);
-        result = {
-          userId,
-          space: u?.spaceId ? await repo.get("spaces", u.spaceId) : null,
-        };
-      } else if (action === "createSpace") {
         result = await repo.transaction(async (tx) => {
           const u = await tx.get("users", userId);
-          ensure(!u?.spaceId, "ALREADY_BOUND", "当前账号已有空间");
+          const bound = u?.spaceId ? await tx.get("spaces", u.spaceId) : null;
+          if (bound?.status === "active") return { userId, space: bound };
+          if (u?.spaceId)
+            await tx.put("users", userId, {
+              ...u,
+              spaceId: null,
+              closingSpaceId: bound?.id || u.closingSpaceId || null,
+            });
+          const closing =
+            bound ||
+            (u?.closingSpaceId
+              ? await tx.get("spaces", u.closingSpaceId)
+              : null);
+          return {
+            userId,
+            space: readableSpace(closing, now()) ? closing : null,
+          };
+        });
+      } else if (action === "createSpace") {
+        result = await repo.transaction(async (tx) => {
+          const u = await availableBinding(tx, userId);
           const s: Space = {
             id: deps.id(),
             members: [userId],
@@ -152,7 +197,7 @@ export function createApi(deps: ServerDeps) {
             createdAt: now(),
           };
           await tx.put("spaces", s.id, s);
-          await tx.put("users", userId, { spaceId: s.id });
+          await tx.put("users", userId, { ...u, spaceId: s.id });
           return s;
         });
       } else if (action === "joinSpace") {
@@ -164,8 +209,7 @@ export function createApi(deps: ServerDeps) {
             "INVITE_EXPIRED",
             "邀请已过期或已经使用",
           );
-          const u = await tx.get("users", userId);
-          ensure(!u?.spaceId, "ALREADY_BOUND", "当前账号已有空间");
+          const u = await availableBinding(tx, userId);
           const s = await tx.get("spaces", invitation.spaceId);
           ensure(
             s && s.status === "active" && !s.members.includes(userId),
@@ -175,7 +219,7 @@ export function createApi(deps: ServerDeps) {
           ensure(s.members.length < 2, "SPACE_FULL", "这个空间已经住了两个人");
           s.members = [...s.members, userId];
           await tx.put("spaces", s.id, s);
-          await tx.put("users", userId, { spaceId: s.id });
+          await tx.put("users", userId, { ...u, spaceId: s.id });
           await tx.put("invitations", tokenHash, {
             ...invitation,
             usedBy: userId,
@@ -185,7 +229,7 @@ export function createApi(deps: ServerDeps) {
         });
       } else if (action === "registerDevice") {
         result = await repo.transaction(async (tx) => {
-          await member(tx, input.spaceId, userId);
+          await member(tx, input.spaceId, userId, true, now());
           const dId = id(input.id);
           const previous = await tx.get("devices", dId);
           ensure(
@@ -226,8 +270,21 @@ export function createApi(deps: ServerDeps) {
         });
       } else {
         const spaceId = id(input.spaceId);
-        const space = await member(repo, spaceId, userId);
+        const readOnly = [
+          "getSpace",
+          "listRecords",
+          "listDevices",
+          "fileGet",
+          "closeSpace",
+          "cancelClose",
+        ].includes(action);
+        const space = await member(repo, spaceId, userId, true, now());
         await authorizedDevice(repo, input.deviceId, userId, spaceId);
+        ensure(
+          space.status === "active" || readOnly,
+          "SPACE_CLOSING",
+          "空间正在关闭冷静期，只能查看、导出或撤销关闭",
+        );
         if (action === "getSpace") result = space;
         else if (action === "createInvitation") {
           ensure(space.members.length < 2, "SPACE_FULL", "空间已经住了两个人");
@@ -265,35 +322,80 @@ export function createApi(deps: ServerDeps) {
             "INVALID_TRANSFER",
             "密钥包来源不正确",
           );
-          const target = await repo.get("devices", id(t.toDevice));
-          ensure(
-            target && target.spaceId === spaceId && target.status === "active",
-            "FORBIDDEN",
-            "目标设备无效",
-          );
-          ensure(
-            t.keyVersion === space.keyVersion,
-            "KEY_VERSION_MISMATCH",
-            "空间密钥版本已更新",
-          );
-          await repo.put("key_envelopes", id(t.id), {
-            id: t.id,
-            spaceId,
-            fromDevice: t.fromDevice,
-            toDevice: t.toDevice,
-            keyVersion: t.keyVersion,
-            ephemeralPublicKey: str(t.ephemeralPublicKey, 44),
-            envelope: validateEnvelope(t.envelope),
-            signature: str(t.signature, 88),
+          result = await repo.transaction(async (tx) => {
+            const current = await member(tx, spaceId, userId);
+            await authorizedDevice(tx, input.deviceId, userId, spaceId);
+            const target = await tx.get("devices", id(t.toDevice));
+            ensure(
+              target &&
+                target.spaceId === spaceId &&
+                target.status === "active",
+              "FORBIDDEN",
+              "目标设备无效",
+            );
+            ensure(
+              t.keyVersion === current.keyVersion,
+              "KEY_VERSION_MISMATCH",
+              "空间密钥版本已更新",
+            );
+            ensure(
+              !(await tx.get("key_envelopes", id(t.id))),
+              "TRANSFER_EXISTS",
+              "密钥包标识已经存在，请重新发送",
+            );
+            await tx.put("key_envelopes", id(t.id), {
+              id: t.id,
+              spaceId,
+              fromDevice: t.fromDevice,
+              toDevice: t.toDevice,
+              keyVersion: t.keyVersion,
+              ephemeralPublicKey: str(t.ephemeralPublicKey, 44),
+              envelope: validateEnvelope(t.envelope),
+              signature: str(t.signature, 88),
+              createdAt: now(),
+              expiresAt: now() + TRANSFER_TTL_MS,
+            });
+            return { sent: true };
           });
-          result = { sent: true };
         } else if (action === "getTransfers") {
-          result = await repo.list(
-            "key_envelopes",
-            { spaceId, toDevice: input.deviceId },
-            0,
-            100,
-          );
+          result = [];
+          let offset = 0;
+          while (result.length < 100) {
+            const rows = await repo.list(
+              "key_envelopes",
+              {
+                spaceId,
+                toDevice: input.deviceId,
+                keyVersion: space.keyVersion,
+              },
+              offset,
+              100,
+            );
+            result.push(
+              ...rows.filter((t) => !t.expiresAt || t.expiresAt > now()),
+            );
+            if (rows.length < 100) break;
+            offset += rows.length;
+          }
+          result = result
+            .slice(0, 100)
+            .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0));
+        } else if (action === "ackTransfer") {
+          result = await repo.transaction(async (tx) => {
+            await member(tx, spaceId, userId);
+            await authorizedDevice(tx, input.deviceId, userId, spaceId);
+            const transferId = id(input.transferId);
+            const transfer = await tx.get("key_envelopes", transferId);
+            if (!transfer) return { acknowledged: true };
+            ensure(
+              transfer.spaceId === spaceId &&
+                transfer.toDevice === input.deviceId,
+              "FORBIDDEN",
+              "只能确认发给本设备的密钥包",
+            );
+            await tx.remove("key_envelopes", transferId);
+            return { acknowledged: true };
+          });
         } else if (action === "rotateSpaceKey") {
           ensure(
             Array.isArray(input.transfers) &&
@@ -327,6 +429,11 @@ export function createApi(deps: ServerDeps) {
                 "DEVICE_REVOKED",
                 "目标设备已撤销",
               );
+              ensure(
+                !(await tx.get("key_envelopes", id(t.id))),
+                "TRANSFER_EXISTS",
+                "密钥包标识已经存在",
+              );
               await tx.put("key_envelopes", id(t.id), {
                 id: t.id,
                 spaceId,
@@ -336,6 +443,8 @@ export function createApi(deps: ServerDeps) {
                 ephemeralPublicKey: str(t.ephemeralPublicKey, 44),
                 envelope: validateEnvelope(t.envelope),
                 signature: str(t.signature, 88),
+                createdAt: now(),
+                expiresAt: now() + TRANSFER_TTL_MS,
               });
             }
             const updated = {
@@ -540,30 +649,163 @@ export function createApi(deps: ServerDeps) {
             "AI_CONSENT_REQUIRED",
             "请查看发送预览并给予本次授权",
           );
-          const text = str(input.text, 16000);
-          const task = str(input.task, 100);
+          ensure(
+            typeof input.taskId === "string" &&
+              Object.prototype.hasOwnProperty.call(AI_TASKS, input.taskId),
+            "INVALID_TASK",
+            "不支持的回忆整理方式",
+          );
+          const task = AI_TASKS[input.taskId as keyof typeof AI_TASKS];
+          const text = str(input.text, AI_TEXT_LIMIT);
+          ensure(
+            space.members.length === 2,
+            "PAIR_REQUIRED",
+            "请先完成双人绑定，再使用回忆整理",
+          );
           ensure(
             deps.ai,
             "AI_NOT_CONFIGURED",
             "还没有配置 AI 服务，请在云函数环境变量中设置服务地址、模型和密钥",
           );
           await repo.transaction(async (tx) => {
-            const rateId = hash(userId);
+            const current = await member(tx, spaceId, userId);
+            await authorizedDevice(tx, input.deviceId, userId, spaceId);
+            ensure(
+              current.members.length === 2,
+              "PAIR_REQUIRED",
+              "请先完成双人绑定",
+            );
+            const rateId = "user-" + hash(userId);
             const rate = await tx.get("ai_limits", rateId);
             ensure(
               !rate || now() - rate.at >= 10000,
               "RATE_LIMITED",
               "请稍后再生成",
             );
-            await tx.put("ai_limits", rateId, { at: now() });
+            const day = new Date(now() + 8 * 3600000)
+              .toISOString()
+              .slice(0, 10);
+            const spaceRateId = `space-${spaceId}-${day}`;
+            const globalRateId = `global-${day}`;
+            const spaceRate = await tx.get("ai_limits", spaceRateId);
+            const globalRate = await tx.get("ai_limits", globalRateId);
+            const perSpace = deps.aiLimits?.spaceDaily ?? AI_SPACE_DAILY_LIMIT;
+            const global = deps.aiLimits?.globalDaily ?? AI_GLOBAL_DAILY_LIMIT;
+            ensure(
+              (spaceRate?.count || 0) < perSpace,
+              "AI_SPACE_QUOTA",
+              "这个空间今天的整理次数已用完，请明天再来",
+            );
+            ensure(
+              (globalRate?.count || 0) < global,
+              "AI_GLOBAL_QUOTA",
+              "今天的 AI 整理总额度已用完，请明天再来",
+            );
+            const expiresAt = now() + 3 * 86400000;
+            // Reserve before contacting the provider. Failures with uncertain billing still consume a slot.
+            await tx.put("ai_limits", rateId, {
+              id: rateId,
+              at: now(),
+              expiresAt,
+            });
+            await tx.put("ai_limits", spaceRateId, {
+              id: spaceRateId,
+              spaceId,
+              day,
+              count: (spaceRate?.count || 0) + 1,
+              expiresAt,
+            });
+            await tx.put("ai_limits", globalRateId, {
+              id: globalRateId,
+              day,
+              count: (globalRate?.count || 0) + 1,
+              expiresAt,
+            });
           });
           result = { text: await deps.ai(text, task) };
         } else if (action === "closeSpace") {
           result = await repo.transaction(async (tx) => {
-            const current = await member(tx, spaceId, userId);
+            const current = await member(tx, spaceId, userId, true, now());
             await authorizedDevice(tx, input.deviceId, userId, spaceId);
-            await tx.put("spaces", spaceId, { ...current, status: "closed" });
-            return { closed: true };
+            if (current.status === "closing") return current;
+            const confirmations = [
+              ...new Set([...(current.closeConfirmations || []), userId]),
+            ].filter((member) => current.members.includes(member));
+            if (
+              !current.members.every((member) => confirmations.includes(member))
+            ) {
+              const requested = {
+                ...current,
+                closeConfirmations: confirmations,
+                closeRequestedAt: current.closeRequestedAt || now(),
+              };
+              await tx.put("spaces", spaceId, requested);
+              return requested;
+            }
+            const closing = {
+              ...current,
+              status: "closing",
+              closeConfirmations: confirmations,
+              closedBy: confirmations[0],
+              closingAt: now(),
+              purgeAfter: now() + CLOSING_GRACE_MS,
+            };
+            await tx.put("spaces", spaceId, closing);
+            for (const memberId of current.members) {
+              const user = await tx.get("users", memberId);
+              if (user?.spaceId === spaceId)
+                await tx.put("users", memberId, {
+                  ...user,
+                  spaceId: null,
+                  closingSpaceId: spaceId,
+                });
+            }
+            return closing;
+          });
+        } else if (action === "cancelClose") {
+          result = await repo.transaction(async (tx) => {
+            const current = await member(tx, spaceId, userId, true, now());
+            await authorizedDevice(tx, input.deviceId, userId, spaceId);
+            if (
+              current.status === "active" &&
+              current.closeConfirmations?.length
+            ) {
+              const { closeConfirmations, closeRequestedAt, ...active } =
+                current;
+              await tx.put("spaces", spaceId, active);
+              return active;
+            }
+            ensure(
+              current.status === "closing",
+              "INVALID_STATE",
+              "空间没有处于关闭冷静期",
+            );
+            for (const memberId of current.members) {
+              const user = await tx.get("users", memberId);
+              ensure(
+                (!user?.spaceId || user.spaceId === spaceId) &&
+                  (user?.closingSpaceId === spaceId ||
+                    user?.spaceId === spaceId),
+                "CLOSE_NOT_REVERSIBLE",
+                "已有成员建立了新空间，不能恢复旧空间；冷静期内仍可导出",
+              );
+              await tx.put("users", memberId, {
+                ...user,
+                spaceId,
+                closingSpaceId: null,
+              });
+            }
+            const {
+              closedBy,
+              closingAt,
+              purgeAfter,
+              closeConfirmations,
+              closeRequestedAt,
+              ...active
+            } = current;
+            const restored = { ...active, status: "active" };
+            await tx.put("spaces", spaceId, restored);
+            return restored;
           });
         } else throw new AppError("UNKNOWN_ACTION", "接口不存在");
       }

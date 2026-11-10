@@ -1,4 +1,9 @@
-// WeChat does not consistently expose TextEncoder/TextDecoder. Bundled locally.
+// Must run before fast-text-encoding: it reads globalThis at module load.
+import { root } from "./bootstrap";
 import "fast-text-encoding";
-if (typeof globalThis.structuredClone !== "function")
-  globalThis.structuredClone = <T>(v: T): T => JSON.parse(JSON.stringify(v));
+if (typeof Object.hasOwn !== "function") {
+  (Object as any).hasOwn = (obj: any, prop: PropertyKey): boolean =>
+    Object.prototype.hasOwnProperty.call(obj, prop);
+}
+if (typeof root.structuredClone !== "function")
+  root.structuredClone = <T>(v: T): T => JSON.parse(JSON.stringify(v));

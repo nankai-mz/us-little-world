@@ -70,8 +70,14 @@ async function main() {
   const config = await readFile(join(root, "miniprogram/config.ts"), "utf8");
   const cloudEnv =
     config.match(/["']?cloudEnv["']?\s*:\s*["']([^"']*)["']/)?.[1] || "";
+  const devCloudEnv =
+    config.match(/["']?devCloudEnv["']?\s*:\s*["']([^"']*)["']/)?.[1] || "";
   const configuredAppId = /^wx[a-fA-F0-9]{16}$/.test(project.appid || "");
   const configuredEnv = /^[A-Za-z0-9][A-Za-z0-9_-]{2,79}$/.test(cloudEnv);
+  const configuredDevEnv =
+    !devCloudEnv ||
+    (/^[A-Za-z0-9][A-Za-z0-9_-]{2,79}$/.test(devCloudEnv) &&
+      devCloudEnv !== cloudEnv);
   const [major, minor] = process.versions.node.split(".").map(Number);
   check(
     "node",
@@ -99,15 +105,70 @@ async function main() {
       !app.requiredBackgroundModes?.includes("location"),
     "Only active chooseLocation is declared",
   );
+  check(
+    "dev-cloud-env",
+    configuredDevEnv,
+    devCloudEnv
+      ? "Separate development environment configured"
+      : "Empty; develop/trial falls back to production",
+  );
   const outputs = [
     "dist/index.html",
+    "dist/.vite/manifest.json",
     "miniprogram/app.js",
     "miniprogram/generated/controller.js",
     "miniprogram/generated/platform.js",
     "cloudfunctions/usApi/index.js",
   ];
+  try {
+    const index = await readFile(join(root, "dist/index.html"), "utf8");
+    for (const match of index.matchAll(
+      /(?:src|href)="(\/assets\/[^"?#]+\.(?:js|css))"/g,
+    ))
+      outputs.push(`dist${match[1]}`);
+  } catch {
+    /* The normal output check reports a missing index. */
+  }
+  try {
+    const manifest = await json("dist/.vite/manifest.json");
+    for (const entry of Object.values(manifest)) {
+      for (const file of [
+        entry.file,
+        ...(entry.css || []),
+        ...(entry.assets || []),
+      ]) {
+        if (
+          typeof file !== "string" ||
+          !file ||
+          file.split(/[\\/]/).includes("..") ||
+          !resolve(root, "dist", file).startsWith(
+            join(root, "dist") + (process.platform === "win32" ? "\\" : "/"),
+          )
+        )
+          throw new Error("Invalid manifest path");
+        const output = `dist/${file}`;
+        if (!outputs.includes(output)) outputs.push(output);
+      }
+    }
+    check(
+      "web-manifest",
+      true,
+      "Current Vite manifest binds all emitted chunks and assets",
+    );
+  } catch {
+    check(
+      "web-manifest",
+      false,
+      "Build the browser bundle and its Vite manifest",
+    );
+  }
   const hashes = {};
   const sourceTime = await latest([
+    "vite.config.ts",
+    "package.json",
+    "package-lock.json",
+    "cloudfunctions/usApi/package.json",
+    "cloudfunctions/usApi/package-lock.json",
     "src",
     "web",
     "miniprogram/config.ts",
@@ -151,6 +212,9 @@ async function main() {
       "tests",
       "web/platform.ts",
       "web/photos.ts",
+      "web/style.css",
+      "miniprogram/app.wxss",
+      "miniprogram/app.json",
       "miniprogram/media.ts",
       "miniprogram/presentation.ts",
       "scripts/wxml-check.mjs",
@@ -222,6 +286,7 @@ async function main() {
     configuration: {
       appIdConfigured: configuredAppId,
       cloudEnvironmentConfigured: configuredEnv,
+      developmentEnvironmentConfigured: !!devCloudEnv && configuredDevEnv,
     },
     sdk: {
       version: cloudPkg.dependencies["wx-server-sdk"],

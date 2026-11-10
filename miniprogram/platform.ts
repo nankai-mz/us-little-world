@@ -3,6 +3,7 @@ import { AppError, type RandomSource } from "../src/core/types";
 import { createTransport } from "../src/core/transport";
 import { UsService } from "../src/core/service";
 import { config } from "./config";
+import { cloudEnv } from "./cloud";
 const rng: RandomSource = (n) =>
   new Promise((resolve, reject) => {
     if (typeof wx.getRandomValues !== "function")
@@ -19,7 +20,7 @@ const rng: RandomSource = (n) =>
     });
   });
 const transport = createTransport(async (action, data) => {
-  if (!config.cloudEnv)
+  if (!cloudEnv)
     throw new AppError(
       "CLOUD_NOT_CONFIGURED",
       "请先在 miniprogram/config.ts 填写云环境 ID 并部署 usApi",

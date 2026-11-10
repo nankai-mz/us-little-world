@@ -1,13 +1,13 @@
 {
-  "generatedAt": "2026-11-01T08:26:29.439Z",
+  "generatedAt": "2026-11-08T07:05:53.995Z",
   "timezone": "Asia/Shanghai",
-  "version": "1.2.0",
+  "version": "1.2.5",
   "scope": "local-release-preparation",
   "localBuildReady": true,
-  "configurationComplete": false,
+  "configurationComplete": true,
   "configuration": {
-    "appIdConfigured": false,
-    "cloudEnvironmentConfigured": false
+    "appIdConfigured": true,
+    "cloudEnvironmentConfigured": true
   },
   "sdk": {
     "version": "5.0.1-beta.1",
@@ -29,7 +29,7 @@
     {
       "name": "version",
       "status": "pass",
-      "detail": "package 1.2.0; cloud 1.2.0"
+      "detail": "package 1.2.5; cloud 1.2.5"
     },
     {
       "name": "client-permission-template",
@@ -42,7 +42,17 @@
       "detail": "Only active chooseLocation is declared"
     },
     {
+      "name": "web-manifest",
+      "status": "pass",
+      "detail": "Current Vite manifest binds all emitted chunks and assets"
+    },
+    {
       "name": "build:dist/index.html",
+      "status": "pass",
+      "detail": "Built after current source changes"
+    },
+    {
+      "name": "build:dist/.vite/manifest.json",
       "status": "pass",
       "detail": "Built after current source changes"
     },
@@ -67,14 +77,24 @@
       "detail": "Built after current source changes"
     },
     {
+      "name": "build:dist/assets/index-DDJs2xQ7.js",
+      "status": "pass",
+      "detail": "Built after current source changes"
+    },
+    {
+      "name": "build:dist/assets/index-BlJGcgSX.css",
+      "status": "pass",
+      "detail": "Built after current source changes"
+    },
+    {
       "name": "tests",
       "status": "pass",
-      "detail": "64 passed across 7/7 files; full suite and current sources required"
+      "detail": "83 passed across 8/8 files; full suite and current sources required"
     },
     {
       "name": "mini-contract",
       "status": "pass",
-      "detail": "6 routes; 78 conditional bindings; 1135097 bytes; source/Node VM only"
+      "detail": "6 routes; 82 conditional bindings; 1147081 bytes; source/Node VM only"
     },
     {
       "name": "sdk-contract",
@@ -111,11 +131,14 @@
     }
   },
   "outputSha256": {
-    "dist/index.html": "1b256b11ce76b64399be51a6cd6bcbaa22b625a50d836741005c966c8ff96655",
-    "miniprogram/app.js": "ad0ffd75b7403e84903ed7e923ded247d842866cada3a69ff3c5b249fba8b855",
-    "miniprogram/generated/controller.js": "098fc8a6ebc4afb360f4d2376031b964336e403e81a16874b5742de4e4fdc193",
-    "miniprogram/generated/platform.js": "a3e46c42180d25c39ee08cccbaf3ac5cdde3f439a0d8fdc4fd4c1809bea1b3aa",
-    "cloudfunctions/usApi/index.js": "de7bbe9a94a9bf241232c845636ae8e518eadca6901a25bd9a8c79864cb65765"
+    "dist/index.html": "05262b32aad016faa45d0e0adf094212d854063c2c69ed046342c88546759d42",
+    "dist/.vite/manifest.json": "2a6cad1d2a92f1417f0157bec098da083566ac01bf941a5c32d9047a475321a6",
+    "miniprogram/app.js": "2360beadd212e9226b979123d3be27ec54ac1cc28ae51661ee3cd0133a4667ef",
+    "miniprogram/generated/controller.js": "f6eb4e90424426ca3c10009de5ffa0b96b8d6fb153f8d46cf69dfbc6472ce0ea",
+    "miniprogram/generated/platform.js": "f7892f33ea1c3f107a7c42397acb643d361302b7d31cd0dd5b0aea8ded72f4a9",
+    "cloudfunctions/usApi/index.js": "df443309b2e1765cc5da17dfa5cb05c3cafc209b9798c5a54a03c234da705bde",
+    "dist/assets/index-DDJs2xQ7.js": "54aec5f971794598753907a4baf1dd43777fe97e4d888919aa85ee361190c1fd",
+    "dist/assets/index-BlJGcgSX.css": "0b13019d717b20a0f38ff99743b565175f170d0066b482cfea8952ccadab9d2d"
   },
-  "nextStep": "Obtain AppID and CloudBase environment ID, then run npm run configure; no cloud resources have been created"
+  "nextStep": "Deploy into a test environment and perform real two-account/device acceptance"
 }

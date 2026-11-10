@@ -82,14 +82,23 @@ export interface Pet {
   intimacy: number;
   decorations: string[];
   history: { userId: string; action: string; day: string; at: number }[];
+  totalActions?: number;
+  byAction?: Record<string, number>;
+  dailyActions?: Record<string, number>;
 }
 export interface Space {
   id: string;
   members: string[];
-  status: "active" | "closed";
+  status: "active" | "closing" | "purging" | "closed";
   keyVersion: number;
   createdAt: number;
   keyCommitment?: string;
+  closedBy?: string;
+  closingAt?: number;
+  purgeAfter?: number;
+  purgedAt?: number;
+  closeConfirmations?: string[];
+  closeRequestedAt?: number;
 }
 export interface Device {
   id: string;
@@ -128,6 +137,7 @@ export interface Vault {
   passwordEnvelope: Envelope;
   recoveryEnvelope: Envelope;
 }
+export type RecoveryVault = Pick<Vault, "version" | "recoveryEnvelope">;
 export interface ApiReply<T = unknown> {
   success: boolean;
   data?: T;

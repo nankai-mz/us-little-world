@@ -12,6 +12,7 @@ import {
   type StorageAdapter,
   type Transport,
   type Vault,
+  type RecoveryVault,
   type Visibility,
 } from "./types";
 import {
@@ -28,6 +29,7 @@ import {
   publicKeys,
   randomId,
   recoverVault,
+  recoveryOnlyVault,
   seal,
   unb64,
   unlockVault,
@@ -36,6 +38,8 @@ import { addDays, dayNumber, today } from "./date";
 import { canOpenCapsule, newPet, petAction, QUESTIONS } from "./domain";
 import { API_PROTOCOL, type ConnectionStatus } from "./protocol";
 import { base64ByteLength, MAX_PHOTO_BYTES } from "./photos";
+import { validateNewPassword } from "./password";
+import { AI_TASKS, AI_TEXT_LIMIT, type AiTaskId } from "./ai";
 
 export class UsService {
   secrets: Secrets | null = null;
@@ -71,7 +75,11 @@ export class UsService {
   }
   get vault(): Vault | null {
     const v = this.storage.get("vault");
-    return v ? JSON.parse(v) : null;
+    try {
+      return v ? JSON.parse(v) : null;
+    } catch {
+      return null;
+    }
   }
   async persistSecrets() {
     if (!this.secrets || !this.password)
@@ -90,9 +98,35 @@ export class UsService {
     this.password = password;
     await this.bootstrap();
   }
-  async recover(vault: Vault, recoveryKey: string, password: string) {
-    if (password.length < 10)
-      throw new AppError("WEAK_PASSWORD", "解锁口令至少需要 10 位");
+  async createBackup(password: string) {
+    const session = this.secrets;
+    const vault = this.vault;
+    if (!session || !vault) throw new AppError("LOCKED", "请先解锁");
+    let verified: Secrets;
+    try {
+      verified = await unlockVault(vault, password);
+    } catch {
+      throw new AppError("WRONG_PASSWORD", "口令不正确，备份未导出");
+    }
+    if (
+      this.secrets !== session ||
+      verified.userId !== session.userId ||
+      verified.spaceId !== session.spaceId
+    )
+      throw new AppError("LOCKED", "会话已改变，请重新解锁");
+    if (!verified.recoveryKey) {
+      this.password = password;
+      await this.persistSecrets();
+    }
+    if (this.secrets !== session)
+      throw new AppError("LOCKED", "会话已改变，请重新解锁");
+    return {
+      vault: recoveryOnlyVault(this.vault!),
+      recoveryKey: this.secrets.recoveryKey || verified.recoveryKey!,
+    };
+  }
+  async recover(vault: RecoveryVault, recoveryKey: string, password: string) {
+    validateNewPassword(password);
     const recovered = recoverVault(vault, recoveryKey);
     const boot = await this.transport.call<{
       userId: string;
@@ -103,7 +137,7 @@ export class UsService {
       boot.space?.id !== recovered.spaceId
     )
       throw new AppError("IDENTITY_MISMATCH", "备份不属于当前账号和空间");
-    if (boot.space.status !== "active")
+    if (!["active", "closing"].includes(boot.space.status))
       throw new AppError("SPACE_CLOSED", "这个空间已经关闭，无法恢复云端访问");
     this.secrets = recovered;
     this.password = password;
@@ -125,11 +159,15 @@ export class UsService {
       throw new AppError("IDENTITY_MISMATCH", "恢复包不属于当前微信账号");
     }
     this.space = boot.space;
-    if (this.space?.status === "closed") {
+    if (this.space && ["closed", "purging"].includes(this.space.status)) {
       this.lock();
       throw new AppError("SPACE_CLOSED", "这个空间已经关闭，云端访问已停止");
     }
-    if (this.secrets && this.space?.status === "active") {
+    if (
+      this.secrets &&
+      this.space &&
+      ["active", "closing"].includes(this.space.status)
+    ) {
       if (this.secrets.spaceId !== this.space.id)
         throw new AppError("SPACE_MISMATCH", "当前密钥属于其他空间");
       await this.registerDevice();
@@ -143,13 +181,12 @@ export class UsService {
     startDate: string,
     demo = false,
   ) {
-    if (password.length < 10)
-      throw new AppError("WEAK_PASSWORD", "解锁口令至少需要 10 位");
+    validateNewPassword(password);
     const boot = await this.transport.call<{
       userId: string;
       space: Space | null;
     }>("bootstrap");
-    if (boot.space)
+    if (boot.space?.status === "active")
       throw new AppError("ALREADY_BOUND", "当前账号已有空间，请恢复密钥");
     this.secrets = await newSecrets(this.rng, boot.userId);
     this.password = password;
@@ -176,8 +213,7 @@ export class UsService {
     return recovery;
   }
   async join(password: string, token: string) {
-    if (password.length < 10)
-      throw new AppError("WEAK_PASSWORD", "解锁口令至少需要 10 位");
+    validateNewPassword(password);
     const { userId } = await this.transport.call<{ userId: string }>(
       "bootstrap",
     );
@@ -204,6 +240,7 @@ export class UsService {
     if (!this.secrets || !this.space) throw new AppError("LOCKED", "请先解锁");
     return this.transport.call<T>(action, {
       ...data,
+      apiProtocol: API_PROTOCOL,
       spaceId: this.space.id,
       deviceId: this.secrets.deviceId,
     });
@@ -278,6 +315,11 @@ export class UsService {
   ) {
     if (!this.secrets || !this.space) throw new AppError("LOCKED", "请先解锁");
     const session = this.secrets;
+    if (this.space.status !== "active")
+      throw new AppError(
+        "SPACE_CLOSING",
+        "空间正在关闭冷静期，只能查看、导出或撤销关闭",
+      );
     if (!data.title.trim())
       throw new AppError("TITLE_REQUIRED", "写个小标题吧");
     dayNumber(data.date);
@@ -575,6 +617,8 @@ export class UsService {
     await this.persistSecrets();
   }
   async receive(verifiedFingerprint: string) {
+    const session = this.secrets;
+    if (!session) throw new AppError("LOCKED", "请先解锁");
     const devices = await this.devices();
     const transfers = await this.call<KeyTransfer[]>("getTransfers");
     const t = transfers
@@ -588,6 +632,8 @@ export class UsService {
         ),
       );
     if (!t) throw new AppError("KEY_NOT_FOUND", "尚未收到匹配此安全码的密钥包");
+    if (this.secrets !== session)
+      throw new AppError("LOCKED", "会话已改变，请重新解锁");
     const sender = devices.find((d) => d.id === t.fromDevice)!;
     this.secrets = acceptTransfer(t, this.secrets!, sender.signingPublicKey);
     this.secrets.trustedDevices = {
@@ -595,6 +641,7 @@ export class UsService {
       [sender.id]: fingerprint(sender),
     };
     await this.persistSecrets();
+    await this.call("ackTransfer", { transferId: t.id });
     await this.refresh();
   }
   async rotateKey() {
@@ -648,7 +695,7 @@ export class UsService {
       await this.persistSecrets();
     }
   }
-  async ai(selected: string[], consentAt: number, task: string) {
+  async ai(selected: string[], consentAt: number, taskId: AiTaskId) {
     const entries = this.active.filter(
       (e) =>
         selected.includes(e.id) &&
@@ -663,12 +710,35 @@ export class UsService {
     const text = entries
       .map((e) => `${e.data.date} ${e.data.title}\n${e.data.body || ""}`)
       .join("\n\n");
+    if (!Object.prototype.hasOwnProperty.call(AI_TASKS, taskId))
+      throw new AppError("INVALID_TASK", "不支持的回忆整理方式");
+    if (text.length > AI_TEXT_LIMIT)
+      throw new AppError(
+        "AI_TEXT_TOO_LONG",
+        `选中的回忆超过 ${AI_TEXT_LIMIT} 字，请减少选择`,
+      );
     return this.call<{ text: string }>("aiGenerate", {
       text,
-      task,
+      taskId,
       consent: true,
       consentAt,
     });
+  }
+  async closeSpace() {
+    const session = this.secrets;
+    const space = await this.call<Space>("closeSpace");
+    if (!session || session !== this.secrets)
+      throw new AppError("LOCKED", "会话已改变，请重新解锁");
+    this.space = space;
+    await this.refresh();
+  }
+  async cancelClose() {
+    const session = this.secrets;
+    const space = await this.call<Space>("cancelClose");
+    if (!session || session !== this.secrets)
+      throw new AppError("LOCKED", "会话已改变，请重新解锁");
+    this.space = space;
+    await this.refresh();
   }
   lock() {
     ++this.refreshSerial;

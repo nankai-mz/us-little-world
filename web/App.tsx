@@ -68,7 +68,7 @@ import {
   togetherDays,
 } from "../src/core/date";
 import { canOpenCapsule, report, secureChoice } from "../src/core/domain";
-import { fingerprint, publicKeys } from "../src/core/crypto";
+import { fingerprint, publicKeys, recoveryOnlyVault } from "../src/core/crypto";
 import {
   createBrowserService,
   download,
@@ -242,6 +242,7 @@ export function App() {
   const [startDate, setStartDate] = useState(today());
   const [welcomeMode, setWelcomeMode] = useState("welcome");
   const [recovery, setRecovery] = useState("");
+  const [backupPassword, setBackupPassword] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("全部");
   const [monthFilter, setMonthFilter] = useState("");
@@ -280,7 +281,19 @@ export function App() {
     setDetail(null);
     setAiPreview(false);
     setAiConsent(false);
+    setRecovery("");
+    setBackupPassword("");
   }, []);
+  const unlocked = !!service?.ready;
+  useEffect(() => {
+    if (!unlocked) {
+      setRecovery("");
+      setBackupPassword("");
+      setModal((current) =>
+        ["recovery", "verify-backup"].includes(current) ? "" : current,
+      );
+    }
+  }, [unlocked]);
   const notify = useCallback((message: string) => setToast(message), []);
   const update = () => setRevision((v) => v + 1);
   const run = async <T,>(
@@ -376,12 +389,16 @@ export function App() {
     document.addEventListener("visibilitychange", change);
     return () => document.removeEventListener("visibilitychange", change);
   }, [service, revision > 0]);
-  async function enterDemo() {
+  async function enterDemo(confirmReset = false) {
     await run(async () => {
       const s = createBrowserService("demo");
       const savedPassword = sessionStorage.getItem("us.demo.password");
       if (s.vault && savedPassword) await s.unlock(savedPassword);
       else {
+        if (s.vault && !confirmReset) {
+          setModal("reset-demo");
+          return;
+        }
         const all = Object.keys(localStorage).filter((k) =>
           k.startsWith("us.demo."),
         );
@@ -395,6 +412,7 @@ export function App() {
       if (s.ready) setService(s);
       setMode("demo");
       localStorage.setItem("us.mode", "demo");
+      setModal("");
       setWelcomeMode("welcome");
     });
   }
@@ -543,14 +561,31 @@ export function App() {
           </h2>
           <p className="muted">
             {welcomeMode === "unlock"
-              ? "输入本机解锁口令，打开你的加密手账。"
+              ? mode === "demo"
+                ? "示例使用临时随机口令，没有需要你记住的默认密码。"
+                : "输入本机解锁口令，打开你的加密手账。"
               : "微信版是我们的目的地，这里可以先体验。"}
           </p>
-          {welcomeMode === "welcome" ? (
+          {welcomeMode === "unlock" && mode === "demo" ? (
+            <div className="demo-session-ended">
+              <p>
+                这是示例空间的临时会话，不需要你记住随机口令。原会话已结束，现有示例数据暂时保留。
+              </p>
+              <button
+                className="secondary full"
+                onClick={() => setWelcomeMode("welcome")}
+              >
+                返回体验入口
+              </button>
+              <p className="fineprint">
+                重新进入示例前会询问是否重建；如果要保留修改，可先使用已导出的备份恢复。
+              </p>
+            </div>
+          ) : welcomeMode === "welcome" ? (
             <>
               <button
                 className="primary full"
-                onClick={enterDemo}
+                onClick={() => enterDemo()}
                 disabled={busy}
               >
                 {busy ? "正在准备我们的时光…" : "逛逛示例小世界"}
@@ -658,6 +693,23 @@ export function App() {
           <div className="toast" role="status">
             {toast}
           </div>
+        )}
+        {modal === "reset-demo" && (
+          <Modal title="重建示例前，请确认数据范围" close={close}>
+            <p>
+              这会清除示例里的日期、日记、照片和其他修改，重新生成示例。个人加密空间不受影响。如果要保留修改，请先用已导出的备份恢复。
+            </p>
+            <button className="secondary full" onClick={close}>
+              保留原示例，返回
+            </button>
+            <button
+              className="danger-button full"
+              disabled={busy}
+              onClick={() => enterDemo(true)}
+            >
+              确认重建示例
+            </button>
+          </Modal>
         )}
         {modal === "restore" && (
           <Modal title="恢复加密备份" close={close}>
@@ -867,6 +919,63 @@ export function App() {
           </div>
         </header>
         <div className="content">
+          {(service.space?.status === "closing" ||
+            !!service.space?.closeConfirmations?.length) && (
+            <section className="closing-notice" aria-label="空间关闭状态">
+              <h2>
+                {service.space?.status === "closing"
+                  ? "空间处于七天关闭冷静期"
+                  : "已收到关闭空间请求"}
+              </h2>
+              <p>
+                {service.space?.status === "closing"
+                  ? `当前只可查看和导出。预计在 ${new Date(service.space.purgeAfter!).toLocaleString("zh-CN")} 后由清理任务删除云端数据。若已有成员建立新空间，将无法撤销关闭。`
+                  : "双方确认后才解除绑定并开始七天冷静期，到期将清理双方共同及私人云端数据。目前仍可正常使用，任一方可以撤销请求。"}
+              </p>
+              {service.space?.status === "active" && (
+                <button
+                  className="secondary"
+                  disabled={
+                    busy ||
+                    service.space.closeConfirmations?.includes(service.userId)
+                  }
+                  onClick={() =>
+                    run(() => service.closeSpace(), "关闭状态已更新")
+                  }
+                >
+                  {service.space.closeConfirmations?.includes(service.userId)
+                    ? "等待对方确认"
+                    : "同意关闭并启动七天冷静期"}
+                </button>
+              )}
+              <button
+                className="secondary"
+                disabled={busy}
+                onClick={() =>
+                  run(
+                    () => service.cancelClose(),
+                    "关闭已撤销，双方可以继续使用",
+                  )
+                }
+              >
+                撤销关闭
+              </button>
+              <button
+                className="text-button"
+                onClick={() => setModal("export")}
+              >
+                先导出备份
+              </button>
+              {service.space?.status === "closing" && (
+                <button
+                  className="text-button"
+                  onClick={() => setModal("new-space")}
+                >
+                  建立新空间
+                </button>
+              )}
+            </section>
+          )}
           <div className="page-heading">
             <div>
               <span className="eyebrow">
@@ -1530,6 +1639,10 @@ export function App() {
                   </div>
                   {showMemories(stats.highlights, true)}
                   <div className="report-actions">
+                    <p className="fineprint">
+                      宠物日统计保留 400 天，明细保留 30
+                      天，更早互动只保留累计次数。
+                    </p>
                     <button className="primary" onClick={() => window.print()}>
                       <ArrowDownToLine size={16} /> 打印 / 保存 PDF
                     </button>
@@ -1636,14 +1749,18 @@ export function App() {
                         </label>
                         <button
                           className="primary"
-                          disabled={!aiConsent || busy}
+                          disabled={
+                            !aiConsent ||
+                            busy ||
+                            service.space?.members.length !== 2
+                          }
                           onClick={() =>
                             run(async () => {
                               setAiConsent(false);
                               const result = await service.ai(
                                 aiSelected,
                                 Date.now(),
-                                "整理为一段温柔自然的回忆文字，不评价关系，不捏造经历",
+                                "story",
                               );
                               setAiResult(result.text);
                             }, "回忆文案已经生成")
@@ -1653,7 +1770,8 @@ export function App() {
                         </button>
                         <p className="fineprint">
                           本机预览未连接 AI 服务。微信版需配置服务地址、模型与
-                          API 密钥。
+                          API 密钥。 正式整理需已绑定两位成员；输入最多 6000
+                          字，每空间每天最多 10 次。
                         </p>
                       </>
                     ) : (
@@ -1963,6 +2081,10 @@ export function App() {
                   </section>
                   <section className="card pet-history">
                     <h3>陪伴的痕迹</h3>
+                    <p className="fineprint">
+                      累计陪伴 {pet?.totalActions ?? pet?.history.length ?? 0}{" "}
+                      次。保留最近 30 天明细、400 天日统计，累计次数长期保留。
+                    </p>
                     {pet?.history
                       .slice(-6)
                       .reverse()
@@ -2338,8 +2460,8 @@ export function App() {
                     title: "备份与恢复密钥",
                     text: "为重要的回忆留一把备用钥匙",
                     action: () => {
-                      setRecovery(service.secrets?.recoveryKey || "");
-                      setModal("recovery");
+                      setBackupPassword("");
+                      setModal("verify-backup");
                     },
                   },
                   {
@@ -2357,7 +2479,7 @@ export function App() {
                   {
                     icon: Settings,
                     title: "隐私与空间设置",
-                    text: "外部服务说明、解除绑定与本机数据",
+                    text: "外部服务、关闭空间与本机数据",
                     action: () => setModal("privacy"),
                   },
                 ].map((item) => (
@@ -2606,6 +2728,37 @@ export function App() {
           </button>
         </Modal>
       )}
+      {modal === "verify-backup" && (
+        <Modal title="确认本机口令，再查看备份" close={close}>
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              run(async () => {
+                const backup = await service.createBackup(backupPassword);
+                setRecovery(backup.recoveryKey);
+                setBackupPassword("");
+                setModal("recovery");
+              });
+            }}
+          >
+            <Field label="再次输入本机口令">
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={backupPassword}
+                onChange={(event) => setBackupPassword(event.target.value)}
+                required
+              />
+            </Field>
+            <p className="fineprint">
+              新备份只包含恢复密钥信封，不包含本机口令信封。
+            </p>
+            <button className="primary full" disabled={busy || !backupPassword}>
+              验证并查看恢复密钥
+            </button>
+          </form>
+        </Modal>
+      )}
       {modal === "recovery" && (
         <Modal
           title="给回忆，留一把备用钥匙"
@@ -2620,14 +2773,13 @@ export function App() {
           <button
             className="primary full"
             onClick={() => {
-              download(`Us-恢复密钥-${day}.txt`, recovery, "text/plain");
               download(
                 `Us-加密备份-${day}.json`,
                 JSON.stringify(
                   {
                     format: "UsBackup",
-                    version: 1,
-                    vault: service.vault,
+                    version: 2,
+                    vault: recoveryOnlyVault(service.vault!),
                     database: service.storage.get("database"),
                     files: Object.fromEntries(
                       Object.keys(localStorage)
@@ -2644,7 +2796,15 @@ export function App() {
               );
             }}
           >
-            保存恢复密钥和加密备份
+            保存加密备份文件
+          </button>
+          <button
+            className="secondary full"
+            onClick={() =>
+              download(`Us-恢复密钥-${day}.txt`, recovery, "text/plain")
+            }
+          >
+            单独保存恢复密钥
           </button>
           <p className="fineprint">建议把恢复密钥与加密备份放在不同位置。</p>
         </Modal>
@@ -2784,8 +2944,8 @@ export function App() {
           <button
             className="primary full"
             onClick={() => {
-              setRecovery(service.secrets?.recoveryKey || "");
-              setModal("recovery");
+              setBackupPassword("");
+              setModal("verify-backup");
             }}
           >
             <ShieldCheck size={16} /> 保存加密备份
@@ -2889,14 +3049,14 @@ export function App() {
             </p>
             <h3>关于设备和退出空间</h3>
             <p>
-              撤销设备只能阻止后续云端访问，不能撤回已经解密的内容。解除绑定会关闭双方的云端访问，请先导出需要保存的回忆。私人内容不会被另一方删除。
+              撤销设备只能阻止后续云端访问，不能撤回已经解密的内容。双人空间须双方确认后才解除绑定并进入七天只读冷静期，到期清理双方共同及私人云端密文。请提前导出备份。
             </p>
           </div>
           <button
             className="secondary full"
             onClick={() => setModal("close-space")}
           >
-            解除绑定 / 关闭空间
+            申请或确认关闭空间
           </button>
           <button
             className="text-button full danger"
@@ -2909,20 +3069,36 @@ export function App() {
       {modal === "close-space" && (
         <Modal title="关闭这个空间？" close={close}>
           <p className="muted">
-            关闭后双方的云端读写会立即停止，记录不会自动删除。请先保存备份。这个操作无法在当前版本内撤销。
+            双人空间须双方确认后才解除绑定并进入七天只读冷静期；期间可查看、导出或撤销。单人空间仅需本人确认。到期清理任务会删除共同记录、双方私人记录、照片和密钥包。若任一成员已建立新空间，旧空间就无法撤销关闭。请先保存备份。
           </p>
           <button
             className="danger-button full"
             onClick={() =>
               run(async () => {
-                await service.call("closeSpace");
-                service.lock();
-                setWelcomeMode("unlock");
+                await service.closeSpace();
                 close();
-              }, "空间已关闭，云端访问已停止")
+              }, "关闭状态已更新，请留意双方确认状态并保存备份")
             }
           >
             确认关闭空间
+          </button>
+        </Modal>
+      )}
+      {modal === "new-space" && (
+        <Modal title="建立新空间前，请先导出备份" close={close}>
+          <p>
+            建立新空间后，旧空间不能撤销关闭；本机将使用新空间的密钥库。旧空间将在冷静期结束后清理。请确认已保存旧空间的加密备份和恢复密钥。
+          </p>
+          <button
+            className="danger-button full"
+            onClick={() => {
+              service.lock();
+              close();
+              setWelcomeMode("create");
+              update();
+            }}
+          >
+            已保存备份，前往创建
           </button>
         </Modal>
       )}

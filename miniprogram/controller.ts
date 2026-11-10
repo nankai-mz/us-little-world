@@ -115,6 +115,7 @@ export function pageFactory(
         screen: defaults[pageName],
         ready: false,
         authMode: "welcome",
+        loading: !!service.secrets,
         busy: false,
         error: "",
         configured: !!config.cloudEnv,
@@ -148,23 +149,32 @@ export function pageFactory(
         customQuestion: "",
       },
     },
-    onLoad(this: any, query: Record<string, string>) {
+    onLoad(this: any, query?: Record<string, string | undefined>) {
+      const q = query || {};
       this._unloaded = false;
       this._page = pageName;
-      this._entryId = query.id;
-      this._kind = query.kind || "memory";
+      this._entryId = q.id;
+      this._kind = q.kind || "memory";
       vm(this, {
-        screen: query.view || defaults[pageName],
-        selectedQuestionId: query.view === "question" ? query.id || "" : "",
+        screen: q.view || defaults[pageName],
+        selectedQuestionId: q.view === "question" ? q.id || "" : "",
       });
     },
     async onShow(this: any) {
       this._hidden = false;
-      if (service.ready)
+      if (service.secrets && !this.data.viewModel.ready)
+        vm(this, { loading: true });
+      if (service.ready) {
+        // Render the cached session first so switching pages never flashes the
+        // welcome/auth screen while the network refresh is in flight.
+        await this.refresh();
         await work(this, async () => {
           await service.refresh();
         });
-      await this.refresh();
+        await this.refresh();
+      } else {
+        await this.refresh();
+      }
     },
     async onPullDownRefresh(this: any) {
       await work(this, async () => {
@@ -180,7 +190,13 @@ export function pageFactory(
         clearTimeout(this._spinTimer);
         this._finishSpin?.();
       }
-      vm(this, { effectText: "", effectType: "", spinning: false });
+      vm(this, {
+        effectText: "",
+        effectType: "",
+        spinning: false,
+        recoveryKey: "",
+        backupPassword: "",
+      });
     },
     onUnload(this: any) {
       this._unloaded = true;
@@ -201,6 +217,7 @@ export function pageFactory(
         this._editorLoaded = false;
         vm(this, {
           ready: false,
+          loading: false,
           authMode: service.vault ? "unlock" : "welcome",
           entries: [],
           memories: [],
@@ -312,10 +329,20 @@ export function pageFactory(
         }));
       vm(this, {
         ready: true,
+        loading: false,
         hasSharedKey: service.ready,
         currentDevice: service.secrets.deviceId,
         userId: service.userId,
         spaceMembers: service.space.members.length,
+        spaceClosing: service.space.status === "closing",
+        closePending:
+          service.space.status === "active" &&
+          !!service.space.closeConfirmations?.length,
+        closeConfirmedByMe:
+          service.space.closeConfirmations?.includes(service.userId) || false,
+        purgeDate: service.space.purgeAfter
+          ? new Date(service.space.purgeAfter).toLocaleString()
+          : "",
         unreadable: service.unreadable,
         name: relationship?.data.title || "我们的小世界",
         relationshipId: relationship?.id || "",
@@ -486,6 +513,9 @@ export function pageFactory(
       vm(this, { [field]: e.detail.value });
       if (field === "search") this.refresh();
     },
+    passwordInput(this: any, e: any) {
+      vm(this, { password: e.detail.value });
+    },
     formInput(this: any, e: any) {
       const field = e.currentTarget.dataset.field;
       const value = e.detail.value;
@@ -565,6 +595,8 @@ export function pageFactory(
         aiPreview: false,
         aiConsent: false,
         selectedQuestionId: "",
+        recoveryKey: "",
+        backupPassword: "",
       });
       this.refresh();
     },
@@ -1117,11 +1149,7 @@ export function pageFactory(
         const v = this.data.viewModel;
         if (!v.aiConsent) throw new Error("请先预览并确认本次授权");
         vm(this, { aiConsent: false });
-        const r = await service.ai(
-          v.aiSelected,
-          Date.now(),
-          "根据选中的回忆整理自然温柔的故事，不评价关系，不捏造经历",
-        );
+        const r = await service.ai(v.aiSelected, Date.now(), "story");
         vm(this, { result: r.text });
       });
     },
@@ -1166,7 +1194,11 @@ export function pageFactory(
       });
     },
     async copyInvite(this: any) {
-      await wx.setClipboardData({ data: this.data.viewModel.invite });
+      await work(this, async () => {
+        if (typeof wx.requirePrivacyAuthorize === "function")
+          await wx.requirePrivacyAuthorize({});
+        await wx.setClipboardData({ data: this.data.viewModel.invite });
+      });
     },
     async sendKey(this: any, e: any) {
       const device = this.data.viewModel.devices.find(
@@ -1235,11 +1267,14 @@ export function pageFactory(
     },
     async backup(this: any) {
       await work(this, async () => {
-        vm(this, { recoveryKey: service.secrets?.recoveryKey || "" });
+        const backup = await service.createBackup(
+          this.data.viewModel.backupPassword || "",
+        );
+        vm(this, { recoveryKey: backup.recoveryKey, backupPassword: "" });
         await shareJson(`Us-加密密钥备份-${today()}`, {
           format: "UsCloudKeyBackup",
-          version: 1,
-          vault: service.vault,
+          version: 2,
+          vault: backup.vault,
         });
       });
     },
@@ -1257,6 +1292,8 @@ export function pageFactory(
     },
     async restoreVault(this: any) {
       await work(this, async () => {
+        if (typeof wx.requirePrivacyAuthorize === "function")
+          await wx.requirePrivacyAuthorize({});
         const file = await wx.chooseMessageFile({
           count: 1,
           type: "file",
@@ -1266,14 +1303,17 @@ export function pageFactory(
           .getFileSystemManager()
           .readFileSync(file.tempFiles[0].path, "utf8") as string;
         const backup = JSON.parse(raw);
-        if (backup.format !== "UsCloudKeyBackup" || backup.version !== 1)
+        if (
+          backup.format !== "UsCloudKeyBackup" ||
+          ![1, 2].includes(backup.version)
+        )
           throw new Error("请选择 Us 云端密钥备份文件");
         const v = this.data.viewModel;
         await service.recover(backup.vault, v.code, v.password);
         vm(this, {
           password: "",
           code: "",
-          recoveryKey: service.secrets?.recoveryKey,
+          recoveryKey: "",
         });
         await this.refresh();
       });
@@ -1286,17 +1326,34 @@ export function pageFactory(
     async closeSpace(this: any) {
       if (
         !(await confirm(
-          "关闭后双方均无法继续访问云空间，无法在应用内撤销。记录不会自动删除。请先导出备份。",
+          "双人空间须双方确认，之后解除绑定并进入七天只读冷静期，可导出或撤销。到期清理任务会删除共同及双方私人数据。任一成员建立新空间后不可撤销旧空间关闭。请先保存备份。",
           "关闭双人空间",
         ))
       )
         return;
       await work(this, async () => {
-        await service.call("closeSpace");
-        service.lock();
-        clearDecryptedFiles();
+        await service.closeSpace();
         await this.refresh();
       });
+    },
+    async cancelClose(this: any) {
+      await work(this, async () => {
+        await service.cancelClose();
+        await this.refresh();
+      });
+    },
+    async newSpace(this: any) {
+      if (
+        !(await confirm(
+          "建立新空间后不能撤销旧空间关闭，本机也将使用新密钥库。请确认已经保存旧空间的加密备份和恢复密钥。",
+          "建立新空间",
+        ))
+      )
+        return;
+      service.lock();
+      clearDecryptedFiles();
+      await this.refresh();
+      vm(this, { authMode: "create" });
     },
   };
 }

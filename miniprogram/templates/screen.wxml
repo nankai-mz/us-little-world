@@ -6,7 +6,11 @@
       aria-live="polite"
       >{{effectText}}</view
     >
-    <view wx:if="{{!ready}}" class="auth">
+    <view wx:if="{{loading}}" class="auth">
+      <view class="logo">us<text>✳</text></view>
+      <text class="subtitle">正在打开我们的小世界…</text>
+    </view>
+    <view wx:elif="{{!ready}}" class="auth">
       <view class="logo">us<text>✳</text></view
       ><view class="eyebrow">A PRIVATE LITTLE PLACE FOR TWO</view
       ><view class="auth-title">把日子过成<view>我们喜欢的样子。</view></view
@@ -74,7 +78,7 @@
           password
           value="{{password}}"
           data-field="password"
-          bindinput="input"
+          bindinput="passwordInput"
           placeholder="口令不会发送到服务器"
           maxlength="200"
         />
@@ -108,8 +112,39 @@
       <text class="fineprint"
         >继续即了解：仅你的微信身份用于访问控制，内容在设备上加密。密钥丢失后服务器无法恢复。请保存加密备份和恢复密钥。</text
       >
+      <view class="fineprint" style="text-align:center">v1.2.5</view>
     </view>
     <block wx:else>
+      <view
+        wx:if="{{spaceClosing || closePending}}"
+        class="notice closing-notice"
+        ><view class="section-title"
+          >{{spaceClosing ? '空间处于七天关闭冷静期' :
+          '已收到关闭空间请求'}}</view
+        ><text wx:if="{{spaceClosing}}"
+          >目前只能查看和导出。预计 {{purgeDate}}
+          后由清理任务删除双方共同及私人云端数据。已有成员建立新空间时不可撤销。</text
+        ><text wx:else
+          >双方确认后才解除绑定并开始七天冷静期，到期将清理双方共同及私人数据。目前仍可正常使用，任一方可以撤销请求。</text
+        ><button
+          wx:if="{{closePending}}"
+          class="secondary"
+          bindtap="closeSpace"
+          disabled="{{busy || closeConfirmedByMe}}"
+        >
+          {{closeConfirmedByMe ? '等待对方确认' : '同意关闭并启动七天冷静期'}}</button
+        ><button class="secondary" bindtap="cancelClose" disabled="{{busy}}">
+          {{spaceClosing ? '撤销关闭' : '撤销关闭请求'}}</button
+        ><button class="text-button" data-view="backup" bindtap="navigate">
+          先导出备份</button
+        ><button
+          wx:if="{{spaceClosing}}"
+          class="text-button"
+          bindtap="newSpace"
+        >
+          建立新空间
+        </button></view
+      >
       <view class="error" wx:if="{{error}}">{{error}}</view
       ><view class="notice" wx:if="{{unreadable}}"
         >有 {{unreadable}} 条记录暂时无法解密，请检查密钥备份。</view
@@ -468,7 +503,7 @@
               bindinput="formInput"
               placeholder="小小期待 / 很想实现 / 慢慢来" /></block
           ><block
-            wx:if="{{form.kind === 'anniversary' &amp;&amp; form.category !== 'relationship'}}"
+            wx:if="{{form.kind === 'anniversary' && form.category !== 'relationship'}}"
             ><view class="switch-row"
               ><text>每一年，都想记住</text
               ><switch
@@ -501,7 +536,7 @@
           ></view
         ></block
       >
-      <block wx:if="{{screen === 'detail' &amp;&amp; detail}}"
+      <block wx:if="{{screen === 'detail' && detail}}"
         ><view class="eyebrow">A MOMENT TO REMEMBER</view
         ><view class="heading">{{detail.data.title}}</view
         ><text class="subtitle"
@@ -577,7 +612,7 @@
             >{{item.data.openedAt ? '已经开启' : item.remaining > 0 ? '还有 ' +
             item.remaining + ' 天' : '到了约定的日子'}}</view
           ><button
-            wx:if="{{item.data.needsBoth &amp;&amp; !item.confirmed}}"
+            wx:if="{{item.data.needsBoth && !item.confirmed}}"
             class="secondary"
             data-id="{{item.id}}"
             data-action="confirm"
@@ -655,8 +690,8 @@
         ><button class="primary full" bindtap="exportReport">
           保存报告数据</button
         ><text class="fineprint"
-          >统计只在本机进行。浏览器预览同时支持打印 / 保存
-          PDF；小程序当前导出报告 JSON。</text
+          >统计只在本机进行。宠物日统计保留 400 天，明细保留 30
+          天。浏览器预览同时支持打印 / 保存 PDF；小程序当前导出报告 JSON。</text
         ></block
       >
       <block wx:if="{{screen === 'ai'}}"
@@ -691,12 +726,14 @@
               color="#b48376" /></view
           ><button
             class="primary full"
-            disabled="{{!aiConsent || busy}}"
+            disabled="{{!aiConsent || busy || spaceMembers !== 2}}"
             bindtap="aiGenerate"
             loading="{{busy}}"
           >
-            确认并生成
-          </button></view
+            确认并生成</button
+          ><text class="fineprint"
+            >正式整理需两位成员；输入最多 6000 字，每空间每天最多 10 次。</text
+          ></view
         ><view class="card" wx:if="{{result}}"
           ><text class="label">审核、修改后再保存</text
           ><textarea
@@ -857,6 +894,9 @@
           ><image src="/assets/pet-room.png" mode="aspectFit" /><text
             class="pet-level"
             >Lv.{{petLevel}} · {{pet.exp}} 点共同回忆</text
+          ><text class="fineprint"
+            >累计陪伴 {{pet.totalActions || pet.history.length || 0}}
+            次；明细保留 30 天，日统计保留 400 天。</text
           ></view
         ><view class="card"
           ><view class="section-title">今天，怎么陪陪它？</view
@@ -1206,14 +1246,14 @@
               ''}}</view
             ><text selectable class="tiny">{{item.fingerprint}}</text
             ><button
-              wx:if="{{item.id !== currentDevice &amp;&amp; hasSharedKey}}"
+              wx:if="{{item.id !== currentDevice && hasSharedKey}}"
               class="text-button"
               data-id="{{item.id}}"
               bindtap="sendKey"
             >
               核对安全码后，发送加密空间密钥 →</button
             ><button
-              wx:if="{{item.userId === userId &amp;&amp; item.id !== currentDevice}}"
+              wx:if="{{item.userId === userId && item.id !== currentDevice}}"
               class="text-button"
               data-id="{{item.id}}"
               bindtap="revokeDevice"
@@ -1222,7 +1262,7 @@
             </button></view
           ></view
         ><button
-          wx:if="{{spaceMembers &lt; 2}}"
+          wx:if="{{spaceMembers < 2}}"
           class="primary full"
           bindtap="createInvite"
         >
@@ -1242,12 +1282,23 @@
         ><view class="card"
           ><text class="subtitle"
             >请分开离线保管「加密密钥备份」和「恢复密钥」。恢复仍需要原微信账号与可访问的云空间。</text
-          ><button class="primary full" bindtap="backup">
+          ><text class="label">再次输入本机口令</text
+          ><input
+            password
+            value="{{backupPassword}}"
+            data-field="backupPassword"
+            bindinput="input"
+            placeholder="验证后才显示恢复密钥并导出备份"
+          /><button
+            class="primary full"
+            bindtap="backup"
+            disabled="{{busy || !backupPassword}}"
+          >
             导出加密密钥备份</button
           ><text wx:if="{{recoveryKey}}" class="security-code" selectable
             >{{recoveryKey}}</text
           ><text class="fineprint"
-            >备份包含密钥库密文；照片与日记仍在云端。如需明文记录，请从「我的」单独导出。</text
+            >新备份只包含恢复密钥信封，不包含本机口令信封；照片与日记仍在云端。旧版备份仍可恢复。</text
           ></view
         ></block
       >
@@ -1288,14 +1339,14 @@
             >照片解密后临时保存于微信应用目录，隐藏、退出页面和锁定时清理。请妥善保管设备、解锁口令与离线备份。</text
           ><view class="section-title">退出空间</view
           ><text
-            >关闭空间会停止双方云访问，不自动删除另一方的私人内容。请先导出需要的备份；当前版本不能重新开启关闭的空间。</text
+            >双人空间须双方确认后才解除绑定并进入七天只读冷静期。到期后清理任务会删除共同及双方私人云端数据。请提前导出备份；任一成员建立新空间后不能撤销关闭。</text
           ><button class="danger full" bindtap="closeSpace">
-            解除绑定 / 关闭空间
+            申请或确认关闭空间
           </button></view
         ></block
       >
       <view class="footer">一点日常，一点喜欢。<text>MADE FOR US ♡</text></view>
     </block>
-    <view class="error" wx:if="{{error &amp;&amp; !ready}}">{{error}}</view>
+    <view class="error" wx:if="{{error && !ready}}">{{error}}</view>
   </view>
 </template>

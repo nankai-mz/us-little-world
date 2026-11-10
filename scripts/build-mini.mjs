@@ -1,6 +1,10 @@
 import { build } from "esbuild";
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { Resvg } from "@resvg/resvg-js";
+// Runs before every bundled dependency. Older WeChat base libraries may not
+// expose globalThis, and fast-text-encoding reads it during module evaluation.
+const bootstrapBanner =
+  '"use strict";var __US_GLOBAL_ROOT__;try{__US_GLOBAL_ROOT__=typeof globalThis!=="undefined"?globalThis:Function("return this")()}catch(e){__US_GLOBAL_ROOT__=null}if(__US_GLOBAL_ROOT__&&typeof __US_GLOBAL_ROOT__.globalThis>"u")__US_GLOBAL_ROOT__.globalThis=__US_GLOBAL_ROOT__;';
 const pages = [
   "home",
   "memories",
@@ -36,16 +40,52 @@ for (const page of pages) {
   );
 }
 await mkdir("miniprogram/generated", { recursive: true });
+const nobleCompatPlugin = {
+  name: "noble-compat",
+  setup(b) {
+    b.onLoad({ filter: /[\\/]node_modules[\\/].+\.js$/ }, async (args) => {
+      let contents = await readFile(args.path, "utf8");
+      let changed = false;
+      if (contents.includes("Object.hasOwn(")) {
+        contents = contents.replace(
+          /Object\.hasOwn\(([^,]+),\s*([^)]+)\)/g,
+          "Object.prototype.hasOwnProperty.call($1, $2)",
+        );
+        changed = true;
+      }
+      if (contents.includes("proto !== Object.prototype && proto !== null")) {
+        contents = contents.replace(
+          /proto !== Object\.prototype && proto !== null(?! &&)/g,
+          "proto !== Object.prototype && proto !== null && Object.prototype.toString.call(value) !== '[object Object]'",
+        );
+        changed = true;
+      }
+      return changed ? { contents, loader: "js" } : null;
+    });
+  },
+};
 await build({
   entryPoints: ["miniprogram/controller.ts"],
   outfile: "miniprogram/generated/controller.js",
   bundle: true,
   format: "cjs",
   platform: "browser",
-  target: "es2020",
+  target: ["es2020", "chrome78"],
   define: { global: "globalThis" },
+  banner: { js: bootstrapBanner },
   minify: true,
-  external: ["./platform"],
+  plugins: [
+    nobleCompatPlugin,
+    {
+      name: "shared-platform",
+      setup(b) {
+        b.onResolve({ filter: /^\.\/platform$/ }, () => ({
+          path: "./platform.js",
+          external: true,
+        }));
+      },
+    },
+  ],
 });
 await build({
   entryPoints: ["miniprogram/platform.ts"],
@@ -53,9 +93,11 @@ await build({
   bundle: true,
   format: "cjs",
   platform: "browser",
-  target: "es2020",
+  target: ["es2020", "chrome78"],
   define: { global: "globalThis" },
+  banner: { js: bootstrapBanner },
   minify: true,
+  plugins: [nobleCompatPlugin],
 });
 // App/controller builds preserve a single platform module instead of bundling it into each page.
 await build({
@@ -64,10 +106,12 @@ await build({
   bundle: true,
   format: "cjs",
   platform: "browser",
-  target: "es2020",
+  target: ["es2020", "chrome78"],
   define: { global: "globalThis" },
+  banner: { js: bootstrapBanner },
   minify: true,
   plugins: [
+    nobleCompatPlugin,
     {
       name: "shared-platform",
       setup(b) {

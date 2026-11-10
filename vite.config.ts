@@ -4,5 +4,10 @@ export default defineConfig({
   plugins: [react()],
   publicDir: "public",
   server: { host: "127.0.0.1", port: 5173, strictPort: true },
-  build: { outDir: "dist", chunkSizeWarningLimit: 700 },
+  build: {
+    outDir: "dist",
+    emptyOutDir: true,
+    manifest: true,
+    chunkSizeWarningLimit: 700,
+  },
 });

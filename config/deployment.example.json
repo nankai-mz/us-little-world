@@ -1,5 +1,6 @@
 {
   "appid": "请填写真实微信小程序AppID",
-  "cloudEnv": "请填写真实CloudBase环境ID",
+  "cloudEnv": "请填写真实正式CloudBase环境ID",
+  "devCloudEnv": "可选：填写开发/体验版使用的测试环境ID",
   "cloudFunction": "usApi"
 }

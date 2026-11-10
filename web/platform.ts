@@ -57,7 +57,7 @@ export async function stageBackup(
 ): Promise<Record<string, string>> {
   if (
     backup?.format !== "UsBackup" ||
-    backup.version !== 1 ||
+    ![1, 2].includes(backup.version) ||
     typeof backup.database !== "string"
   )
     throw new AppError("INVALID_BACKUP", "请选择有效的 Us 加密备份");

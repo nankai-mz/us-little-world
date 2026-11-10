@@ -1,5 +1,5 @@
 import { AppError, type Entry, type Pet } from "./types";
-import { today } from "./date";
+import { addDays, today } from "./date";
 export { QUESTIONS, QUIZ } from "./questions";
 export const newPet = (): Pet => ({
   name: "糯米",
@@ -10,6 +10,9 @@ export const newPet = (): Pet => ({
   intimacy: 0,
   decorations: ["plant"],
   history: [],
+  totalActions: 0,
+  byAction: {},
+  dailyActions: {},
 });
 export function petAction(
   pet: Pet,
@@ -26,9 +29,29 @@ export function petAction(
     ).length >= 5
   )
     throw new AppError("DAILY_LIMIT", "今天已经陪它玩够啦，休息一下也很好");
+  const byAction = { ...pet.byAction };
+  const dailyActions = { ...pet.dailyActions };
+  for (const h of pet.history) {
+    if (!pet.byAction) byAction[h.action] = (byAction[h.action] || 0) + 1;
+    if (!pet.dailyActions) dailyActions[h.day] = (dailyActions[h.day] || 0) + 1;
+  }
+  byAction[action] = (byAction[action] || 0) + 1;
+  dailyActions[day] = (dailyActions[day] || 0) + 1;
   const p = {
     ...pet,
-    history: [...pet.history, { userId, action, day, at }],
+    history: [
+      ...pet.history.filter((h) => h.day >= addDays(day, -29)),
+      { userId, action, day, at },
+    ].slice(-1200),
+    totalActions: (pet.totalActions ?? pet.history.length) + 1,
+    byAction,
+    // At most 400 daily totals; lifetime counters remain available without growing a log forever.
+    dailyActions: Object.fromEntries(
+      Object.entries(dailyActions)
+        .filter(([date]) => date >= addDays(day, -399))
+        .sort(([a], [b]) => a.localeCompare(b))
+        .slice(-400),
+    ),
     exp: pet.exp + 8,
     intimacy: pet.intimacy + 1,
   };
@@ -85,8 +108,14 @@ export function report(entries: Entry[], from: string, to: string) {
       .reduce(
         (n, e) =>
           n +
-          (e.data.pet?.history.filter((h) => h.day >= from && h.day <= to)
-            .length || 0),
+          (e.data.pet?.dailyActions
+            ? Object.entries(e.data.pet.dailyActions).reduce(
+                (count, [day, value]) =>
+                  count + (day >= from && day <= to ? value : 0),
+                0,
+              )
+            : e.data.pet?.history.filter((h) => h.day >= from && h.day <= to)
+                .length || 0),
         0,
       ),
     highlights: memories

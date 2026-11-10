@@ -13,14 +13,12 @@ export function cloudRepository(db: any): Repository {
           const { _id, ...value } = data;
           return value;
         } catch (error: any) {
+          const message = error.errMsg || error.message || "";
+          const code = String(error.code ?? error.errCode ?? "");
           if (
-            (error.errCode === -1 &&
-              /not exist|不存在|not found/i.test(
-                error.errMsg || error.message || "",
-              )) ||
-            /DOCUMENT_NOT_EXIST|DATABASE_DOCUMENT_NOT_EXIST/.test(
-              String(error.code),
-            )
+            ((error.errCode === -1 || code === "-501001" || error.errCode === -501001) &&
+              /not exist|不存在|not found/i.test(message)) ||
+            /DOCUMENT_NOT_EXIST|DATABASE_DOCUMENT_NOT_EXIST/.test(code)
           )
             return null;
           throw error;
@@ -45,7 +43,10 @@ export function cloudRepository(db: any): Repository {
         .skip(offset)
         .limit(limit)
         .get();
-      return response.data.map(({ _id, ...value }: any) => value);
+      return response.data.map(({ _id, ...value }: any) => ({
+        ...value,
+        id: value.id || _id,
+      }));
     },
   };
 }

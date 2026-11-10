@@ -14,6 +14,7 @@ import {
   type RecordMeta,
   type Secrets,
   type Vault,
+  type RecoveryVault,
 } from "./types";
 
 export const b64 = base64.encode;
@@ -194,7 +195,10 @@ export async function unlockVault(
     key.fill(0);
   }
 }
-export function recoverVault(vault: Vault, key: string): Secrets {
+export function recoveryOnlyVault(vault: RecoveryVault): RecoveryVault {
+  return { version: 1, recoveryEnvelope: { ...vault.recoveryEnvelope } };
+}
+export function recoverVault(vault: RecoveryVault, key: string): Secrets {
   return open(
     vault.recoveryEnvelope,
     fromHex(key.replace(/\s/g, "")),
@@ -282,7 +286,15 @@ export async function createTransfer(
       ...meta,
       ephemeralPublicKey: b64(x25519.getPublicKey(ephemeral)),
       envelope: await seal(
-        { key: secrets.spaceKeys[keyVersion] },
+        {
+          key: secrets.spaceKeys[keyVersion],
+          keys: Object.fromEntries(
+            Object.entries(secrets.spaceKeys).filter(
+              ([version]) =>
+                /^[1-9]\d*$/.test(version) && Number(version) <= keyVersion,
+            ),
+          ),
+        },
         shared,
         transferContext(meta),
         rng,
@@ -321,14 +333,43 @@ export function acceptTransfer(
     unb64(t.ephemeralPublicKey),
   );
   try {
-    const { key } = open<{ key: string }>(
+    const payload = open<{ key: string; keys?: Record<string, string> }>(
       t.envelope,
       shared,
       transferContext(t),
     );
+    const keys = payload.keys || { [t.keyVersion]: payload.key };
+    const validKey = (key: unknown) => {
+      try {
+        return (
+          typeof key === "string" &&
+          unb64(key).length === 32 &&
+          b64(unb64(key)) === key
+        );
+      } catch {
+        return false;
+      }
+    };
+    if (
+      !validKey(payload.key) ||
+      keys[t.keyVersion] !== payload.key ||
+      Object.entries(keys).some(
+        ([version, key]) =>
+          !/^[1-9]\d*$/.test(version) ||
+          Number(version) > t.keyVersion ||
+          !validKey(key),
+      )
+    )
+      throw new AppError("INVALID_TRANSFER", "密钥历史格式不正确");
+    for (const [version, key] of Object.entries(keys))
+      if (secrets.spaceKeys[version] && secrets.spaceKeys[version] !== key)
+        throw new AppError(
+          "KEY_HISTORY_MISMATCH",
+          "已保存的历史密钥不匹配，请先刷新并核对安全码",
+        );
     return {
       ...secrets,
-      spaceKeys: { ...secrets.spaceKeys, [t.keyVersion]: key },
+      spaceKeys: { ...secrets.spaceKeys, ...keys },
     };
   } finally {
     shared.fill(0);
