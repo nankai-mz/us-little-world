@@ -165,6 +165,7 @@ export function pageFactory(
     },
     async onShow(this: any) {
       this._hidden = false;
+      this._resumePhotoWork?.();
       if (service.secrets && !this.data.viewModel.ready)
         vm(this, { loading: true });
       if (service.ready) {
@@ -204,6 +205,7 @@ export function pageFactory(
     onUnload(this: any) {
       this._unloaded = true;
       this._hidden = true;
+      this._resumePhotoWork?.();
       this._refreshEpoch = (this._refreshEpoch || 0) + 1;
       if (this._effectTimer) clearTimeout(this._effectTimer);
       if (this._spinTimer) {
@@ -651,50 +653,69 @@ export function pageFactory(
     async addPhoto(this: any) {
       await work(this, async () => {
         const session = service.secrets;
+        const canContinue = async () => {
+          // The native picker can return its result before the page's onShow.
+          while (
+            this._hidden &&
+            !this._unloaded &&
+            session &&
+            service.secrets === session
+          ) {
+            await new Promise<void>((resolve) => {
+              this._resumePhotoWork = () => {
+                this._resumePhotoWork = undefined;
+                resolve();
+              };
+            });
+          }
+          if (this._unloaded) return false;
+          if (!session || service.secrets !== session)
+            throw new AppError("LOCKED", "当前会话已锁定，请解锁后再添加照片");
+          return true;
+        };
         const slots = 6 - (this.data.viewModel.form.photos?.length || 0);
         if (slots <= 0)
           throw new AppError("PHOTO_LIMIT", "每页最多收藏 6 张照片");
         if (typeof wx.requirePrivacyAuthorize === "function")
           await wx.requirePrivacyAuthorize({});
+        if (!(await canContinue())) return;
         const selected = await wx.chooseMedia({
           count: slots,
           mediaType: ["image"],
           sizeType: ["compressed"],
           sourceType: ["album", "camera"],
         });
-        for (const f of selected.tempFiles.slice(0, slots)) {
-          if (!session || service.secrets !== session || this._hidden)
-            throw new Error("当前会话已锁定，请解锁后再添加照片");
-          vm(this, { photoStatus: "正在整理照片，随后加密上传…" });
-          const prepared = await prepareNativePhoto(f.tempFilePath);
-          try {
-            const bytes = wx
-              .getFileSystemManager()
-              .readFileSync(prepared.value, "base64") as string;
-            if (service.secrets !== session) throw new Error("当前会话已锁定");
-            const photo = await service.addPhoto(
-              bytes,
-              prepared.mime,
-              "照片",
-              this.data.viewModel.visibility,
-            );
-            if (service.secrets !== session || this._hidden)
-              throw new Error("请解锁后重新查看照片");
-            const form = {
-              ...this.data.viewModel.form,
-              photos: [...(this.data.viewModel.form.photos || []), photo],
-            };
-            vm(this, { form, photoStatus: "" });
-            if (!this._entryId)
-              await service.saveDraft({
-                form,
-                visibility: this.data.viewModel.visibility,
-              });
-            await this.refresh();
-          } finally {
-            prepared.cleanup();
-            vm(this, { photoStatus: "" });
+        try {
+          for (const f of selected.tempFiles.slice(0, slots)) {
+            if (!(await canContinue())) return;
+            vm(this, { photoStatus: "正在整理照片，随后加密上传…" });
+            const prepared = await prepareNativePhoto(f.tempFilePath);
+            try {
+              if (!(await canContinue())) return;
+              const bytes = wx
+                .getFileSystemManager()
+                .readFileSync(prepared.value, "base64") as string;
+              const visibility = this.data.viewModel.visibility;
+              const photo = await service.addPhoto(
+                bytes,
+                prepared.mime,
+                "照片",
+                visibility,
+              );
+              if (!(await canContinue())) return;
+              const form = {
+                ...this.data.viewModel.form,
+                photos: [...(this.data.viewModel.form.photos || []), photo],
+              };
+              vm(this, { form, photoStatus: "" });
+              if (!this._entryId) await service.saveDraft({ form, visibility });
+              await this.refresh();
+            } finally {
+              prepared.cleanup();
+            }
           }
+        } finally {
+          vm(this, { photoStatus: "" });
         }
       });
     },

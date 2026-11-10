@@ -1,4 +1,4 @@
-export const APP_VERSION = "1.2.6";
+export const APP_VERSION = "1.2.7";
 export const API_PROTOCOL = 2;
 export interface ConnectionStatus {
   appVersion: string;
