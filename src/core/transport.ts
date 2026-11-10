@@ -8,6 +8,10 @@ const READ_ACTIONS = new Set([
   "getTransfers",
   "fileGet",
 ]);
+const ACTION_TIMEOUT_MS = new Map([
+  ["aiGenerate", 35000],
+  ["filePut", 45000],
+]);
 export function createTransport(
   invoke: (action: string, data: Record<string, unknown>) => Promise<unknown>,
   options: { timeoutMs?: number; retries?: number } = {},
@@ -17,8 +21,7 @@ export function createTransport(
       const attempts = READ_ACTIONS.has(action)
         ? 1 + (options.retries ?? 1)
         : 1;
-      const timeoutMs =
-        options.timeoutMs ?? (action === "aiGenerate" ? 35000 : 15000);
+      const timeoutMs = options.timeoutMs ?? ACTION_TIMEOUT_MS.get(action) ?? 15000;
       for (let attempt = 0; attempt < attempts; attempt++) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         let raw: unknown;
@@ -33,7 +36,9 @@ export function createTransport(
                       "TIMEOUT",
                       READ_ACTIONS.has(action)
                         ? "连接超时，请稍后刷新"
-                        : "操作结果尚未确认，请联网刷新后查看，避免重复提交",
+                        : action === "filePut"
+                          ? "照片上传未收到确认，当前未加入日记。请在网络稳定后重试"
+                          : "操作结果尚未确认，请联网刷新后查看，避免重复提交",
                     ),
                   ),
                 timeoutMs,

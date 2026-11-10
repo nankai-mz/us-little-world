@@ -126,6 +126,29 @@ describe("网络重试与超时", () => {
     ).rejects.toMatchObject({ code: "NETWORK_ERROR" });
     expect(invoke).toHaveBeenCalledTimes(1);
   });
+  it("照片上传可以等待较慢的响应，超时后仍不会自动重发", async () => {
+    vi.useFakeTimers();
+    try {
+      const slow = vi.fn(() => new Promise((resolve) => {
+        setTimeout(() => resolve({ success: true, data: "photo" }), 20000);
+      }));
+      const uploaded = expect(createTransport(slow).call("filePut")).resolves.toBe("photo");
+      await vi.advanceTimersByTimeAsync(20000);
+      await uploaded;
+      expect(slow).toHaveBeenCalledOnce();
+
+      const stalled = vi.fn(() => new Promise(() => {}));
+      const timedOut = expect(createTransport(stalled).call("filePut")).rejects.toMatchObject({
+        code: "TIMEOUT",
+        message: expect.stringContaining("当前未加入日记"),
+      });
+      await vi.advanceTimersByTimeAsync(45000);
+      await timedOut;
+      expect(stalled).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("身份拒绝和错误响应不重试", async () => {
     const denied = vi
       .fn()

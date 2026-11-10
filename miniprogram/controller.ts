@@ -688,7 +688,7 @@ export function pageFactory(
         try {
           for (const f of selected.tempFiles.slice(0, slots)) {
             if (!(await canContinue())) return;
-            vm(this, { photoStatus: "正在整理照片，随后加密上传…" });
+            vm(this, { photoStatus: "正在整理照片…" });
             const prepared = await prepareNativePhoto(f.tempFilePath);
             try {
               if (!(await canContinue())) return;
@@ -696,6 +696,7 @@ export function pageFactory(
                 .getFileSystemManager()
                 .readFileSync(prepared.value, "base64") as string;
               const visibility = this.data.viewModel.visibility;
+              vm(this, { photoStatus: "正在加密上传照片，请稍候…" });
               const photo = await service.addPhoto(
                 bytes,
                 prepared.mime,
