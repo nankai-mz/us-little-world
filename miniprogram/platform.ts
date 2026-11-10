@@ -41,7 +41,7 @@ const transport = createTransport(async (action, data) => {
     config: { env },
     data: { action, data },
   };
-  if (action === "filePut" || action === "fileUploadStatus") {
+  if (action === "filePut" || action.startsWith("fileUpload")) {
     return new Promise((resolve, reject) => {
       const startedAt = Date.now();
       if (isTestSpace) console.info("[photo]", action, "sent");

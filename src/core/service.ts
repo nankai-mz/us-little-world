@@ -37,9 +37,13 @@ import {
 import { addDays, dayNumber, today } from "./date";
 import { canOpenCapsule, newPet, petAction, QUESTIONS } from "./domain";
 import { API_PROTOCOL, type ConnectionStatus } from "./protocol";
-import { base64ByteLength, MAX_PHOTO_BYTES } from "./photos";
+import { base64ByteLength, MAX_PHOTO_BYTES, PHOTO_UPLOAD_PART_SIZE } from "./photos";
 import { validateNewPassword } from "./password";
 import { AI_TASKS, AI_TEXT_LIMIT, type AiTaskId } from "./ai";
+
+function unconfirmedPhotoRequest(error: unknown) {
+  return error instanceof AppError && ["TIMEOUT", "NETWORK_ERROR"].includes(error.code);
+}
 
 export class UsService {
   secrets: Secrets | null = null;
@@ -527,6 +531,7 @@ export class UsService {
     mime: string,
     name: string,
     visibility: Visibility,
+    onUploadProgress?: (sent: number, total: number) => void,
   ): Promise<Attachment> {
     if (!["image/jpeg", "image/png", "image/webp"].includes(mime))
       throw new AppError("INVALID_IMAGE", "支持 JPG、PNG 和 WebP 图片");
@@ -547,16 +552,50 @@ export class UsService {
     const envelope = await seal({ base64: bytes }, key, aad, this.rng, version);
     if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
     const receipt = hashText(JSON.stringify([visibility, envelope]));
+    const upload = async () => {
+      const { ciphertext, ...header } = envelope;
+      if (onUploadProgress) {
+        const total = Math.ceil(ciphertext.length / PHOTO_UPLOAD_PART_SIZE);
+        for (let index = 0; index < total; index++) {
+          if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+          const offset = index * PHOTO_UPLOAD_PART_SIZE;
+          const part = { receipt, index, chunk: ciphertext.slice(offset, offset + PHOTO_UPLOAD_PART_SIZE) };
+          try {
+            await this.call("fileUploadPart", part);
+          } catch (error) {
+            // Older cloud functions reject this action before writing any data.
+            if (index === 0 && error instanceof AppError && error.code === "UNKNOWN_ACTION")
+              break;
+            if (!unconfirmedPhotoRequest(error)) throw error;
+            if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+            await this.call("fileUploadPart", part).catch((retryError) => {
+              if (unconfirmedPhotoRequest(retryError))
+                throw new AppError("PHOTO_PART_UNAVAILABLE", "P03 照片分段上传失败");
+              throw retryError;
+            });
+          }
+          onUploadProgress(index + 1, total);
+          if (index + 1 === total) {
+            if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+            const finalize = { receipt, visibility, header };
+            try {
+              return await this.call<{ id: string }>("fileUploadCommit", finalize);
+            } catch (error) {
+              if (!unconfirmedPhotoRequest(error)) throw error;
+              if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+              return this.call<{ id: string }>("fileUploadCommit", finalize);
+            }
+          }
+        }
+      }
+      if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+      return this.call<{ id: string }>("filePut", { envelope, visibility, receipt });
+    };
     let fileId: string;
     try {
-      ({ id: fileId } = await this.call<{ id: string }>("filePut", {
-        envelope,
-        visibility,
-        receipt,
-      }));
+      ({ id: fileId } = await upload());
     } catch (error) {
-      if (!(error instanceof AppError) || !["TIMEOUT", "NETWORK_ERROR"].includes(error.code))
-        throw error;
+      if (!unconfirmedPhotoRequest(error)) throw error;
       if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
       const status = await this.call<{ id: string | null }>("fileUploadStatus", { receipt })
         .catch(() => null);

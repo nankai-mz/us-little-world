@@ -1015,19 +1015,28 @@ button {
   justify-content: center;
   color: #71634f;
 }
-.photo-remove {
+button.photo-remove[size="mini"] {
   position: absolute;
-  top: -12rpx;
-  right: -12rpx;
-  min-height: 68rpx;
-  width: 68rpx;
+  z-index: 1;
+  top: 8rpx;
+  left: 8rpx;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 52rpx;
+  min-width: 52rpx;
+  max-width: 52rpx;
+  height: 52rpx;
+  min-height: 52rpx;
+  margin: 0;
   padding: 0;
-  line-height: 68rpx;
+  line-height: 1;
   border-radius: 50%;
   background: #fffdf8;
   box-shadow: 0 2rpx 8rpx #57422b22;
   color: #9b5f55;
-  font-size: 36rpx;
+  font-size: 32rpx;
 }
 .pet-meter {
   height: 14rpx;

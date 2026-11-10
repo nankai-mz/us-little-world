@@ -33,7 +33,7 @@ $count = 0
 try {
   foreach ($path in [System.IO.Directory]::EnumerateFiles($projectRoot, '*', [System.IO.SearchOption]::AllDirectories)) {
     $relative = [System.IO.Path]::GetRelativePath($projectRoot, $path).Replace('\', '/')
-    if ($relative -match '(^|/)(node_modules|\.git|artifacts|release|coverage)/' -or $relative -match '(^|/)\.env' -or $relative -match '(^|/)project\.private\.config\.json$' -or $relative -match '(\.local\.json|\.log|\.tmp)$') { continue }
+    if ($relative -match '(^|/)(node_modules|\.git|\.codex-remote-attachments|artifacts|release|coverage)/' -or $relative -match '(^|/)\.env' -or $relative -match '(^|/)project\.private\.config\.json$' -or $relative -match '(\.local\.json|\.log|\.tmp)$') { continue }
     if ($relative.StartsWith('dist/') -and -not $webFiles.Contains($relative) -and -not (Test-Path -LiteralPath (Join-Path $projectRoot ('public/' + $relative.Substring(5))) -PathType Leaf)) { continue }
     [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $path, $relative, [System.IO.Compression.CompressionLevel]::Optimal) | Out-Null
     $count++

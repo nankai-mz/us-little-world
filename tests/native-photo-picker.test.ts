@@ -59,7 +59,7 @@ it("相册先返回选图结果、页面后触发 onShow 时，继续加密上�
   expect(showToast).not.toHaveBeenCalled();
   await page.onShow();
   await adding;
-  expect(service.addPhoto).toHaveBeenCalledWith("YWJj", "image/jpeg", "照片", "shared");
+  expect(service.addPhoto).toHaveBeenCalledWith("YWJj", "image/jpeg", "照片", "shared", expect.any(Function));
   expect(page.data.viewModel.form).toMatchObject({ body: "draft", photos: [photo] });
   expect(service.saveDraft).toHaveBeenCalledOnce();
   expect(cleanup).toHaveBeenCalledOnce();

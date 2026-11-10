@@ -702,6 +702,9 @@ export function pageFactory(
                 prepared.mime,
                 "照片",
                 visibility,
+                (sent, total) => vm(this, {
+                  photoStatus: sent === total ? "正在确认照片…" : `正在上传照片 ${sent}/${total}…`,
+                }),
               );
               if (!(await canContinue())) return;
               const form = {

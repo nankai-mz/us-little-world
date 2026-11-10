@@ -432,6 +432,7 @@
                 /><view wx:else class="photo-placeholder">照片暂时无法预览</view
                 ><button
                   class="photo-remove"
+                  size="mini"
                   data-photo="{{item.id}}"
                   bindtap="removePhoto"
                   disabled="{{busy}}"

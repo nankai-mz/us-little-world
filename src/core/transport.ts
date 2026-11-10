@@ -12,6 +12,8 @@ const READ_ACTIONS = new Set([
 const ACTION_TIMEOUT_MS = new Map([
   ["aiGenerate", 35000],
   ["filePut", 45000],
+  ["fileUploadPart", 9000],
+  ["fileUploadCommit", 18000],
   ["fileUploadStatus", 5000],
 ]);
 export function createTransport(

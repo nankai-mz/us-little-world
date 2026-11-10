@@ -7,6 +7,7 @@ import {
   type ApiReply,
 } from "../core/types";
 import { API_PROTOCOL, APP_VERSION } from "../core/protocol";
+import { MAX_PHOTO_CIPHERTEXT, PHOTO_UPLOAD_PART_SIZE } from "../core/photos";
 import {
   AI_TASKS,
   AI_TEXT_LIMIT,
@@ -127,10 +128,32 @@ async function authorizedDevice(
 }
 export function createApi(deps: ServerDeps) {
   const { repo, now, hash } = deps;
-  function photoFileId(spaceId: string, userId: string, value: unknown) {
+  function photoReceipt(value: unknown) {
     const receipt = str(value, 64);
     ensure(/^[a-f0-9]{64}$/.test(receipt), "INVALID_REQUEST", "照片回执格式不正确");
+    return receipt;
+  }
+  function photoFileId(spaceId: string, userId: string, receipt: string) {
     return hash(JSON.stringify([spaceId, userId, receipt])).slice(0, 32);
+  }
+  function photoStageId(spaceId: string, userId: string, deviceId: string, receipt: string) {
+    return "photo-stage-" + hash(JSON.stringify([spaceId, userId, deviceId, receipt])).slice(0, 32);
+  }
+  async function storePhoto(
+    spaceId: string, userId: string, visibility: unknown, envelope: Envelope, receipt?: string,
+  ) {
+    ensure(visibility === "shared" || visibility === "private", "INVALID_REQUEST", "可见范围不正确");
+    if (receipt !== undefined)
+      ensure(
+        receipt === hash(JSON.stringify([visibility, envelope])),
+        "INVALID_REQUEST",
+        "照片回执与密文不匹配",
+      );
+    ensure(deps.filePut, "NOT_CONFIGURED", "文件服务尚未配置");
+    const fileId = receipt === undefined ? deps.id() : photoFileId(spaceId, userId, receipt);
+    const storageId = await deps.filePut(`encrypted/${spaceId}/${fileId}.enc`, JSON.stringify(envelope));
+    await repo.put("encrypted_files", fileId, { id: fileId, spaceId, creatorId: userId, visibility, storageId });
+    return { id: fileId };
   }
   return async function handle(
     userId: string,
@@ -603,44 +626,66 @@ export function createApi(deps: ServerDeps) {
           });
         } else if (action === "filePut") {
           const envelope = validateEnvelope(input.envelope);
+          const receipt = input.receipt === undefined ? undefined : photoReceipt(input.receipt);
+          result = await storePhoto(spaceId, userId, input.visibility, envelope, receipt);
+        } else if (action === "fileUploadPart") {
+          const receipt = photoReceipt(input.receipt);
+          const index = input.index;
+          const chunk = str(input.chunk, PHOTO_UPLOAD_PART_SIZE);
+          const offset = index * PHOTO_UPLOAD_PART_SIZE;
           ensure(
-            ["shared", "private"].includes(input.visibility),
-            "INVALID_REQUEST",
-            "可见范围不正确",
+            Number.isSafeInteger(index) && index >= 0 &&
+              offset + chunk.length <= MAX_PHOTO_CIPHERTEXT &&
+              chunk.length % 4 === 0 && /^[A-Za-z0-9+/]+={0,2}$/.test(chunk),
+            "INVALID_REQUEST", "照片分段格式不正确",
           );
-          ensure(deps.filePut, "NOT_CONFIGURED", "文件服务尚未配置");
-          const receipt = input.receipt;
-          if (receipt !== undefined)
-            ensure(
-              receipt === hash(JSON.stringify([input.visibility, envelope])),
-              "INVALID_REQUEST",
-              "照片回执与密文不匹配",
-            );
-          const fileId = receipt === undefined
-            ? deps.id()
-            : photoFileId(spaceId, userId, receipt);
-          const storageId = await deps.filePut(
-            `encrypted/${spaceId}/${fileId}.enc`,
-            JSON.stringify(envelope),
-          );
-          await repo.put("encrypted_files", fileId, {
-            id: fileId,
-            spaceId,
-            creatorId: userId,
-            visibility: input.visibility,
-            storageId,
+          const stageId = photoStageId(spaceId, userId, input.deviceId, receipt);
+          result = await repo.transaction(async (tx) => {
+            const stage = await tx.get("encrypted_files", stageId);
+            const ciphertext = stage?.receipt === receipt && stage.expiresAt > now()
+              ? stage.ciphertext as string
+              : "";
+            if (offset < ciphertext.length) {
+              ensure(ciphertext.slice(offset, offset + PHOTO_UPLOAD_PART_SIZE) === chunk,
+                "INVALID_REQUEST", "照片分段内容不一致");
+              return { received: true };
+            }
+            ensure(offset === ciphertext.length, "PHOTO_PART_MISSING", "照片分段缺失，请重新添加");
+            await tx.put("encrypted_files", stageId, {
+              id: stageId, spaceId, receipt, staging: true,
+              ciphertext: ciphertext + chunk, expiresAt: now() + 3600000,
+            });
+            return { received: true };
           });
-          result = { id: fileId };
+        } else if (action === "fileUploadCommit") {
+          const receipt = photoReceipt(input.receipt);
+          const stageId = photoStageId(spaceId, userId, input.deviceId, receipt);
+          const fileId = photoFileId(spaceId, userId, receipt);
+          const stage = await repo.get("encrypted_files", stageId);
+          const file = await repo.get("encrypted_files", fileId);
+          if (file?.spaceId === spaceId && file.creatorId === userId && file.storageId) {
+            result = { id: fileId };
+          } else {
+            ensure(stage?.receipt === receipt && stage.expiresAt > now(),
+              "PHOTO_PART_MISSING", "照片分段缺失，请重新添加");
+            const envelope = validateEnvelope({ ...input.header, ciphertext: stage.ciphertext });
+            result = await storePhoto(spaceId, userId, input.visibility, envelope, receipt);
+            await repo.transaction(async (tx) => {
+              if ((await tx.get("encrypted_files", stageId))?.receipt === receipt)
+                await tx.remove("encrypted_files", stageId);
+            }).catch(() => {}); // The staged copy also expires if cleanup is interrupted.
+          }
         } else if (action === "fileUploadStatus") {
-          const fileId = photoFileId(spaceId, userId, input.receipt);
+          const fileId = photoFileId(spaceId, userId, photoReceipt(input.receipt));
           const file = await repo.get("encrypted_files", fileId);
           result = {
-            id: file?.spaceId === spaceId && file.creatorId === userId ? fileId : null,
+            id: file?.spaceId === spaceId && file.creatorId === userId && file.storageId ? fileId : null,
           };
         } else if (action === "fileGet" || action === "fileDelete") {
           const file = await repo.get("encrypted_files", id(input.fileId));
           ensure(
             file &&
+              typeof file.storageId === "string" &&
               file.spaceId === spaceId &&
               (file.visibility === "shared" || file.creatorId === userId),
             "FORBIDDEN",

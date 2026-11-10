@@ -102,7 +102,7 @@ export async function runMaintenance(
         );
         if (!rows.length) break;
         for (const row of rows) {
-          if (collection === "encrypted_files") {
+          if (collection === "encrypted_files" && !row.staging) {
             if (!deps.fileDelete)
               throw new AppError(
                 "NOT_CONFIGURED",
@@ -134,11 +134,12 @@ export async function runMaintenance(
   async function scan(
     collection: string,
     visit: (row: any) => Promise<boolean | "retry">,
+    size = pageSize,
   ) {
     if (remaining <= 0) return;
     const state = await repo.get("maintenance_state", collection);
     const offset = Math.max(0, Number(state?.offset) || 0);
-    const rows = await repo.list(collection, {}, offset, pageSize);
+    const rows = await repo.list(collection, {}, offset, size);
     let seen = 0,
       deleted = 0;
     for (const row of rows) {
@@ -150,7 +151,7 @@ export async function runMaintenance(
     }
     await repo.put("maintenance_state", collection, {
       offset:
-        seen === rows.length && rows.length < pageSize
+        seen === rows.length && rows.length < size
           ? 0
           : Math.max(0, offset + seen - deleted),
     });
@@ -185,6 +186,21 @@ export async function runMaintenance(
         return false;
       });
     }
+    // A stage may contain almost 1 MB of ciphertext, so use a small page.
+    await scan("encrypted_files", async (row) => {
+      if (!row.staging || row.expiresAt > now()) return false;
+      const expired = await repo.transaction(async (tx) => {
+        const current = await tx.get("encrypted_files", row.id);
+        if (!current?.staging || current.expiresAt > now()) return false;
+        await tx.remove("encrypted_files", row.id);
+        return true;
+      });
+      if (expired) {
+        remaining--;
+        removed++;
+      }
+      return expired;
+    }, Math.min(pageSize, 8));
     return { busy: false, removed, completedSpaces };
   } finally {
     await repo.transaction(async (tx) => {

@@ -32,6 +32,7 @@ import {
 } from "../src/core/domain";
 import { createApi } from "../src/server/api";
 import { MemoryRepository } from "../src/server/memory-repo";
+import { MAX_PHOTO_BYTES, MAX_PHOTO_CIPHERTEXT, PHOTO_UPLOAD_PART_SIZE } from "../src/core/photos";
 import {
   AppError,
   type Entry,
@@ -347,6 +348,40 @@ describe("云端权限、并发与客户端集成", () => {
     networkUnavailable = true;
     await expect(a.addPhoto("AQID", "image/png", "照片", "shared"))
       .rejects.toMatchObject({ code: "PHOTO_STATUS_UNAVAILABLE" });
+  });
+  it("最大照片分段传输，回执丢失只重发同一段，并可按原格式读取", async () => {
+    const { a, b, files, repo } = await setup();
+    const invoke = a.transport.call.bind(a.transport);
+    const lengths: number[] = [];
+    const indices: number[] = [];
+    const progress: number[] = [];
+    a.transport.call = async <T>(action: string, data = {} as Record<string, unknown>) => {
+      expect(action).not.toBe("filePut");
+      if (action === "fileUploadPart") {
+        const index = data.index as number;
+        const alreadySent = indices.includes(index);
+        indices.push(index);
+        lengths.push((data.chunk as string).length);
+        const result = await invoke<T>(action, data);
+        if (!alreadySent && index === 1) throw new AppError("TIMEOUT", "模拟分段回执丢失");
+        return result;
+      }
+      if (action === "fileUploadCommit") {
+        expect(data).not.toHaveProperty("chunk");
+        await invoke<T>(action, data);
+        throw new AppError("TIMEOUT", "模拟完成回执丢失");
+      }
+      return invoke<T>(action, data);
+    };
+    const bytes = b64(randomBytes(MAX_PHOTO_BYTES));
+    const photo = await a.addPhoto(bytes, "image/png", "照片", "shared", (sent) => progress.push(sent));
+    const total = Math.ceil(MAX_PHOTO_CIPHERTEXT / PHOTO_UPLOAD_PART_SIZE);
+    expect(indices).toEqual([0, 1, 1, ...Array.from({ length: total - 2 }, (_, i) => i + 2)]);
+    expect(lengths.every((length) => length <= PHOTO_UPLOAD_PART_SIZE)).toBe(true);
+    expect(progress).toHaveLength(total);
+    expect(Object.keys(files)).toHaveLength(1);
+    expect(await repo.list("encrypted_files", { staging: true }, 0, 10)).toEqual([]);
+    expect(await b.readPhoto(photo, "shared")).toBe(bytes);
   });
   it("邀请码只用一次，两个同时加入也不能出现第三名成员", async () => {
     const { a, repo, transport } = await setup();

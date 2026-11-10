@@ -1,6 +1,9 @@
 import { AppError } from "./types";
 
 export const MAX_PHOTO_BYTES = 500 * 1024;
+export const PHOTO_UPLOAD_PART_SIZE = 96 * 1024;
+// XChaCha20-Poly1305 encrypts JSON containing base64, and the result is base64 again.
+export const MAX_PHOTO_CIPHERTEXT = Math.ceil((4 * Math.ceil(MAX_PHOTO_BYTES / 3) + 29) / 3) * 4;
 export const MAX_SOURCE_PHOTO_BYTES = 25 * 1024 * 1024;
 export const PHOTO_MIMES = ["image/jpeg", "image/png", "image/webp"];
 
