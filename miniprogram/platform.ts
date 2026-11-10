@@ -4,6 +4,12 @@ import { createTransport } from "../src/core/transport";
 import { UsService } from "../src/core/service";
 import { config } from "./config";
 import { cloudEnv } from "./cloud";
+
+// Keep the existing vault keys for the original environment.
+const isolatedEnv = cloudEnv !== config.cloudEnv ? cloudEnv : "";
+const storagePrefix = isolatedEnv ? `us.env.${isolatedEnv}.` : "us.";
+const photoPrefix = isolatedEnv ? `us-env.${isolatedEnv}.` : "us-";
+
 const rng: RandomSource = (n) =>
   new Promise((resolve, reject) => {
     if (typeof wx.getRandomValues !== "function")
@@ -34,9 +40,9 @@ const transport = createTransport(async (action, data) => {
 export const service = new UsService(
   transport,
   {
-    get: (k) => wx.getStorageSync(`us.${k}`) || null,
-    set: (k, v) => wx.setStorageSync(`us.${k}`, v),
-    remove: (k) => wx.removeStorageSync(`us.${k}`),
+    get: (k) => wx.getStorageSync(storagePrefix + k) || null,
+    set: (k, v) => wx.setStorageSync(storagePrefix + k, v),
+    remove: (k) => wx.removeStorageSync(storagePrefix + k),
   },
   rng,
 );
@@ -52,7 +58,8 @@ export async function photoPath(
   const session = service.secrets;
   if (!session || !/^[A-Za-z0-9_-]{1,80}$/.test(photo.id))
     throw new AppError("INVALID_IMAGE", "照片标识不正确或空间已锁定");
-  const path = `${wx.env.USER_DATA_PATH}/us-${entry.visibility}-${photo.id}.${photo.mime === "image/png" ? "png" : photo.mime === "image/webp" ? "webp" : "jpg"}`;
+  const extension = photo.mime === "image/png" ? "png" : photo.mime === "image/webp" ? "webp" : "jpg";
+  const path = `${wx.env.USER_DATA_PATH}/${photoPrefix}${entry.visibility}-${photo.id}.${extension}`;
   try {
     wx.getFileSystemManager().accessSync(path);
     return path;
@@ -67,7 +74,7 @@ export function clearDecryptedFiles() {
   const fs = wx.getFileSystemManager();
   try {
     for (const name of fs.readdirSync(wx.env.USER_DATA_PATH))
-      if (/^us-[a-zA-Z0-9_-]+\.(jpg|png|webp)$/.test(name)) {
+      if (name.startsWith(photoPrefix) && /^[a-zA-Z0-9_-]+\.(jpg|png|webp)$/.test(name.slice(photoPrefix.length))) {
         try {
           fs.unlinkSync(`${wx.env.USER_DATA_PATH}/${name}`);
         } catch {}
