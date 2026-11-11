@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { selectCloudTarget } from "../src/core/env";
-import type { Attachment, Entry, Secrets } from "../src/core/types";
+import type { Attachment, Secrets } from "../src/core/types";
 
 describe("开发/生产云环境选择", () => {
   it("正式版始终走正式入口并沿用本机旧密钥库", () => {
@@ -41,15 +41,14 @@ describe("小程序本机环境隔离", () => {
       cloud: { callFunction },
       env: { USER_DATA_PATH: "/local" },
       getFileSystemManager: () => ({
-        accessSync: (path: string) => {
-          if (!files.has(path)) throw new Error("File does not exist");
+        writeFile: ({ filePath, data, success }: { filePath: string; data: string; success: () => void }) => {
+          files.set(filePath, data);
+          success();
         },
-        writeFileSync: (path: string, value: string) => files.set(path, value),
         unlinkSync: (path: string) => files.delete(path),
         readdirSync: () => [...files.keys()].map((path) => path.slice("/local/".length)),
       }),
     });
-    const entry = { visibility: "shared" } as Entry;
     const photo = { id: "photo", mime: "image/jpeg" } as Attachment;
     const dev = await import("../miniprogram/platform");
     await dev.service.transport.call("health");
@@ -60,8 +59,13 @@ describe("小程序本机环境隔离", () => {
     expect(dev.service.vault).toBeNull();
     dev.service.storage.set("vault", '{"testing":true}');
     dev.service.secrets = {} as Secrets;
-    vi.spyOn(dev.service, "readPhoto").mockResolvedValue("test image");
-    const devPhoto = await dev.photoPath(entry, photo);
+    const download = vi.spyOn(dev.service, "readPhoto").mockResolvedValue("test image");
+    const [devPhoto, secondPath] = await Promise.all([
+      dev.photoPath("shared", photo), dev.photoPath("shared", photo),
+    ]);
+    expect(secondPath).toBe(devPhoto);
+    expect(download).toHaveBeenCalledOnce();
+    expect(dev.cachedPhotoPath("shared", photo)).toBe(devPhoto);
     expect(files.get(devPhoto)).toBe("test image");
 
     envVersion = "release";
@@ -74,10 +78,11 @@ describe("小程序本机环境隔离", () => {
     expect(prod.service.vault).toEqual({ legacy: true });
     expect(dev.localExportPath("backup.json")).not.toBe(prod.localExportPath("backup.json"));
     prod.service.secrets = {} as Secrets;
-    const prodPhoto = await prod.photoPath(entry, photo);
+    const prodPhoto = await prod.photoPath("shared", photo, "production");
     expect(files.get(prodPhoto)).toBe("production");
     prod.clearDecryptedFiles();
     expect(files.has(devPhoto)).toBe(true);
+    expect(prod.cachedPhotoPath("shared", photo)).toBe("");
     files.set(prodPhoto, "production");
 
     envVersion = "develop";

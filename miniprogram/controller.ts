@@ -1,5 +1,5 @@
 import "./polyfill";
-import { service, photoPath, clearDecryptedFiles, localExportPath, isTestSpace } from "./platform";
+import { service, photoPath, cachedPhotoPath, forgetPhotoPath, clearDecryptedFiles, localExportPath, isTestSpace } from "./platform";
 import { config } from "./config";
 import {
   AppError,
@@ -49,6 +49,19 @@ const names: Record<string, string> = {
   play: "玩耍",
   sleep: "休息",
 };
+type PhotoJob = { visibility: Visibility; photo: Attachment; targets: string[] };
+
+function showPhoto(page: any, job: PhotoJob, url: string) {
+  const patch: Record<string, string | boolean> = {
+    [`viewModel.photoPaths.${job.photo.id}`]: url,
+  };
+  for (const target of job.targets) {
+    patch[`viewModel.${target}`] = url;
+    if (target.endsWith(".url"))
+      patch[`viewModel.${target.slice(0, -4)}.failed`] = !url;
+  }
+  page.setData(patch);
+}
 function vm(page: any, patch: Record<string, unknown>) {
   if (page._unloaded) return;
   const next = { ...page.data.viewModel, ...patch };
@@ -142,7 +155,7 @@ export function pageFactory(
         mapConsent: false,
         currentDevice: "",
         recoveryKey: "",
-        photoPaths: [],
+        photoPaths: {},
         editorPhotos: [],
         reduceMotion: !!wx.getStorageSync("us.reduceMotion"),
         spinning: false,
@@ -213,7 +226,6 @@ export function pageFactory(
         this._finishSpin?.();
       }
       if (this._draftTimer) clearTimeout(this._draftTimer);
-      clearDecryptedFiles();
     },
     async refresh(this: any) {
       const epoch = (this._refreshEpoch = (this._refreshEpoch || 0) + 1);
@@ -226,7 +238,7 @@ export function pageFactory(
           authMode: service.vault ? "unlock" : "welcome",
           entries: [],
           memories: [],
-          photoPaths: [],
+          photoPaths: {},
           detail: null,
           recent: [],
           capsules: [],
@@ -354,8 +366,6 @@ export function pageFactory(
         startDate: relationship?.data.date || today(),
         together: togetherDays(relationship?.data.date || today()),
         entries,
-        memories,
-        recent: memories.filter((e) => e.visibility === "shared").slice(0, 5),
         capsules: entries
           .filter((e) => e.data.kind === "capsule")
           .map((e) => ({
@@ -413,10 +423,6 @@ export function pageFactory(
             ...h,
             time: new Date(h.at).toLocaleString(),
           })) || [],
-        detail:
-          detail && detail.data.kind === "capsule" && !detail.data.openedAt
-            ? null
-            : detail,
         comments: entries.filter(
           (e) => e.data.kind === "comment" && e.data.targetId === detail?.id,
         ),
@@ -460,58 +466,62 @@ export function pageFactory(
           });
         } catch {}
       }
-      // Decrypted photo paths are temporary and removed on hide/unload/lock.
-      const shown =
-        detail && v.screen === "detail"
-          ? [detail]
-          : v.screen === "home"
-            ? memories
-                .filter((entry) => entry.visibility === "shared")
-                .slice(0, 5)
-            : ["timeline", "album"].includes(v.screen)
-              ? memories
-              : [];
+      const current = () => !this._hidden && !this._unloaded &&
+        service.secrets === session && epoch === this._refreshEpoch;
+      if (!current()) return;
+      const recent = memories.filter((entry) => entry.visibility === "shared").slice(0, 5);
+      const openDetail = detail && (detail.data.kind !== "capsule" || detail.data.openedAt)
+        ? detail : null;
       const form = this.data.viewModel.form;
-      const photoEntries =
-        v.screen === "editor"
-          ? [
-              {
-                data: form,
-                visibility: this.data.viewModel.visibility,
-              } as Entry,
-            ]
-          : shown;
+      const jobs = new Map<string, PhotoJob>();
       const paths: Record<string, string> = {};
-      for (const e of photoEntries)
-        for (const p of e.data.photos || []) {
-          if (
-            this._hidden ||
-            service.secrets !== session ||
-            epoch !== this._refreshEpoch
-          )
-            break;
-          try {
-            paths[p.id] = await photoPath(e, p);
-          } catch {}
+      function queue(visibility: Visibility, photo: Attachment | undefined, target: string) {
+        if (!photo || !/^[A-Za-z0-9_-]{1,80}$/.test(photo.id) ||
+          Object.hasOwn(Object.prototype, photo.id)) return;
+        const job = jobs.get(photo.id);
+        if (job) job.targets.push(target);
+        else {
+          jobs.set(photo.id, { visibility, photo, targets: [target] });
+          paths[photo.id] = cachedPhotoPath(visibility, photo);
         }
-      if (this._hidden || service.secrets !== session) clearDecryptedFiles();
-      else if (epoch === this._refreshEpoch)
-        vm(this, {
-          photoPaths: paths,
-          memories: memories.map((entry) => entryView(entry, paths)),
-          recent: memories
-            .filter((entry) => entry.visibility === "shared")
-            .slice(0, 5)
-            .map((entry) => entryView(entry, paths)),
-          detail:
-            detail && (detail.data.kind !== "capsule" || detail.data.openedAt)
-              ? entryView(detail, paths)
-              : null,
-          editorPhotos: (form?.photos || []).map((photo: Attachment) => ({
-            ...photo,
-            url: paths[photo.id] || "",
-          })),
-        });
+      }
+      if (v.screen === "home")
+        recent.forEach((entry, i) => queue(entry.visibility, entry.data.photos?.[0], `recent[${i}].coverPhotoUrl`));
+      if (["timeline", "album"].includes(v.screen))
+        memories.forEach((entry, i) => queue(entry.visibility, entry.data.photos?.[0], `memories[${i}].coverPhotoUrl`));
+      if (v.screen === "detail" && openDetail)
+        openDetail.data.photos?.forEach((photo, i) => queue(openDetail.visibility, photo, `detail.photos[${i}].url`));
+      if (v.screen === "editor")
+        form?.photos?.forEach((photo: Attachment, i: number) => queue(this.data.viewModel.visibility, photo, `editorPhotos[${i}].url`));
+      this._photoJobs = jobs;
+      vm(this, {
+        photoPaths: paths,
+        memories: memories.map((entry) => entryView(entry, paths)),
+        recent: recent.map((entry) => entryView(entry, paths)),
+        detail: openDetail ? entryView(openDetail, paths) : null,
+        editorPhotos: (form?.photos || []).map((photo: Attachment) => ({
+          ...photo, url: paths[photo.id] || "",
+        })),
+      });
+      const queueIterator = [...jobs.values()].filter(({ photo }) => !paths[photo.id]).values();
+      const load = async () => {
+        while (current()) {
+          const next = queueIterator.next();
+          if (next.done) return;
+          const job = next.value;
+          const url = await photoPath(job.visibility, job.photo).catch(() => "");
+          if (current()) showPhoto(this, job, url);
+        }
+      };
+      for (let worker = 0; worker < Math.min(3, jobs.size); worker++) void load();
+    },
+    photoImageError(this: any, e: any) {
+      if (this._hidden || this._unloaded) return;
+      const { photo, url } = e.currentTarget.dataset;
+      const job: PhotoJob | undefined = this._photoJobs?.get(photo);
+      if (!job || this.data.viewModel.photoPaths[photo] !== url) return;
+      forgetPhotoPath(job.visibility, job.photo, url);
+      showPhoto(this, job, "");
     },
     input(this: any, e: any) {
       const field = e.currentTarget.dataset.field;
@@ -712,6 +722,7 @@ export function pageFactory(
                 photos: [...(this.data.viewModel.form.photos || []), photo],
               };
               vm(this, { form, photoStatus: "" });
+              await photoPath(visibility, photo, bytes).catch(() => {});
               if (!this._entryId) await service.saveDraft({ form, visibility });
               await this.refresh();
             } finally {
@@ -745,7 +756,7 @@ export function pageFactory(
       if (path)
         await wx.previewImage({
           current: path,
-          urls: Object.values(this.data.viewModel.photoPaths) as string[],
+          urls: (Object.values(this.data.viewModel.photoPaths) as string[]).filter(Boolean),
         });
     },
     async favorite(this: any, e: any) {

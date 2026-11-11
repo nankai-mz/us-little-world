@@ -382,6 +382,7 @@ describe("云端权限、并发与客户端集成", () => {
     expect(Object.keys(files)).toHaveLength(1);
     expect(await repo.list("encrypted_files", { staging: true }, 0, 10)).toEqual([]);
     expect(await b.readPhoto(photo, "shared")).toBe(bytes);
+    expect(await b.readPhoto(photo, "shared", () => true)).toBe(bytes);
   });
   it("邀请码只用一次，两个同时加入也不能出现第三名成员", async () => {
     const { a, repo, transport } = await setup();

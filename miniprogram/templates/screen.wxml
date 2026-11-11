@@ -230,6 +230,10 @@
             src="{{item.coverPhotoUrl}}"
             class="memory-image"
             mode="aspectFill"
+            lazy-load
+            data-photo="{{item.data.photos[0].id}}"
+            data-url="{{item.coverPhotoUrl}}"
+            binderror="photoImageError"
           /><view class="memory-content"
             ><view class="meta">{{item.data.date}} · 共同回忆</view
             ><view class="card-title">{{item.data.title}}</view
@@ -328,6 +332,10 @@
               src="{{item.coverPhotoUrl}}"
               class="memory-image"
               mode="aspectFill"
+              lazy-load
+              data-photo="{{item.data.photos[0].id}}"
+              data-url="{{item.coverPhotoUrl}}"
+              binderror="photoImageError"
             /><view class="memory-content"
               ><view class="meta"
                 >{{item.data.date}} · {{item.visibility === 'private' ?
@@ -428,8 +436,10 @@
                   src="{{item.url}}"
                   mode="aspectFill"
                   data-photo="{{item.id}}"
+                  data-url="{{item.url}}"
                   bindtap="previewPhoto"
-                /><view wx:else class="photo-placeholder">照片暂时无法预览</view
+                  binderror="photoImageError"
+                /><view wx:else class="photo-placeholder" bindtap="refresh">{{item.failed ? '轻触重试' : '正在加载…'}}</view
                 ><button
                   class="photo-remove"
                   size="mini"
@@ -551,7 +561,10 @@
               class="detail-image"
               mode="widthFix"
               data-photo="{{item.id}}"
-              bindtap="previewPhoto" /></block
+              data-url="{{item.url}}"
+              bindtap="previewPhoto"
+              binderror="photoImageError"
+            /><view wx:else class="photo-placeholder" bindtap="refresh">{{item.failed ? '轻触重试' : '正在加载…'}}</view></block
           ><text class="detail-body" selectable>{{detail.data.body}}</text
           ><view class="tags"
             ><text wx:for="{{detail.data.tags}}" wx:key="*this"

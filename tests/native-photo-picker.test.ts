@@ -1,11 +1,14 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { pageFactory } from "../miniprogram/controller";
-import { service } from "../miniprogram/platform";
+import { clearDecryptedFiles, photoPath, service } from "../miniprogram/platform";
 import { prepareNativePhoto } from "../miniprogram/media";
-import type { Attachment, Secrets } from "../src/core/types";
+import { newSecrets } from "../src/core/crypto";
+import type { Attachment, Entry, Secrets } from "../src/core/types";
 
 vi.mock("../miniprogram/platform", () => ({
   service: { secrets: null, ready: false, addPhoto: vi.fn(), saveDraft: vi.fn() },
+  photoPath: vi.fn().mockResolvedValue("cached.jpg"),
+  cachedPhotoPath: vi.fn(() => ""),
   clearDecryptedFiles: vi.fn(),
   isTestSpace: true,
 }));
@@ -82,4 +85,33 @@ it("相册返回时若会话已锁定，或页面已卸载，就丢弃选图结�
   await exited.adding;
   expect(service.addPhoto).not.toHaveBeenCalled();
   expect(showToast).not.toHaveBeenCalled();
+});
+
+it("首页只读取封面，较慢的封面不会阻挡另一篇日记的封面", async () => {
+  service.secrets = await newSecrets(async (size) => new Uint8Array(size).fill(7), "user", "space");
+  const entries = ["first", "second"].map((id) => ({
+    id, visibility: "shared", creatorId: "user",
+    data: { kind: "memory", date: "2026-11-11", title: id, photos: [
+      { ...photo, id: id + "-cover" }, { ...photo, id: id + "-extra" },
+    ] },
+  })) as Entry[];
+  Object.assign(service, { entries, active: entries, space: { id: "space", members: ["user"] }, userId: "user" });
+  let finishFirst!: (url: string) => void;
+  vi.mocked(photoPath).mockReturnValueOnce(new Promise<string>((resolve) => { finishFirst = resolve; }))
+    .mockResolvedValueOnce("second.jpg");
+  const page = pageFactory("home") as any;
+  page.setData = vi.fn((patch: object) => Object.assign(page.data, patch));
+  page.onLoad();
+  await page.refresh();
+  await vi.waitFor(() => expect(page.setData).toHaveBeenCalledWith(expect.objectContaining({
+    "viewModel.recent[1].coverPhotoUrl": "second.jpg",
+  })));
+  expect(vi.mocked(photoPath).mock.calls.map((call) => call[1].id)).toEqual(["first-cover", "second-cover"]);
+  page.onUnload();
+  finishFirst("first.jpg");
+  await Promise.resolve();
+  expect(page.setData).not.toHaveBeenCalledWith(expect.objectContaining({
+    "viewModel.recent[0].coverPhotoUrl": "first.jpg",
+  }));
+  expect(clearDecryptedFiles).not.toHaveBeenCalled();
 });

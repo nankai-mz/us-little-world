@@ -49,12 +49,13 @@ export function navigationTitle(
   );
 }
 export function entryView(entry: Entry, paths: Record<string, string>) {
+  const pathFor = (id: string) => Object.hasOwn(paths, id) ? paths[id] : "";
   return {
     ...entry,
-    coverPhotoUrl: paths[entry.data.photos?.[0]?.id || ""] || "",
+    coverPhotoUrl: pathFor(entry.data.photos?.[0]?.id || ""),
     photos: (entry.data.photos || []).map((photo) => ({
       ...photo,
-      url: paths[photo.id] || "",
+      url: pathFor(photo.id),
     })),
   };
 }

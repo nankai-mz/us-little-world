@@ -4,6 +4,7 @@ import {
   type CipherRecord,
   type Device,
   type Entry,
+  type Envelope,
   type KeyTransfer,
   type Payload,
   type RandomSource,
@@ -37,7 +38,7 @@ import {
 import { addDays, dayNumber, today } from "./date";
 import { canOpenCapsule, newPet, petAction, QUESTIONS } from "./domain";
 import { API_PROTOCOL, type ConnectionStatus } from "./protocol";
-import { base64ByteLength, MAX_PHOTO_BYTES, PHOTO_UPLOAD_PART_SIZE } from "./photos";
+import { base64ByteLength, MAX_PHOTO_BYTES, PHOTO_DOWNLOAD_PART_SIZE, PHOTO_UPLOAD_PART_SIZE } from "./photos";
 import { validateNewPassword } from "./password";
 import { AI_TASKS, AI_TEXT_LIMIT, type AiTaskId } from "./ai";
 
@@ -614,20 +615,46 @@ export class UsService {
       bytes: base64ByteLength(bytes),
     };
   }
-  async readPhoto(photo: Attachment, visibility: Visibility): Promise<string> {
+  async readPhoto(photo: Attachment, visibility: Visibility, active?: () => boolean): Promise<string> {
     if (photo.sample) return `/assets/${photo.sample}.svg`;
+    const session = this.secrets;
+    const space = this.space;
+    if (!session || !space) throw new AppError("LOCKED", "请先解锁");
+    const checkSession = () => {
+      if (this.secrets !== session || this.space?.id !== space.id || (active && !active()))
+        throw new AppError("PHOTO_CACHE_EXPIRED", "照片缓存已过期");
+    };
+    const fileId = photo.fileId;
+    const segmented = active && (!photo.bytes || photo.bytes * 16 / 9 + 64 > PHOTO_DOWNLOAD_PART_SIZE);
     const { envelope } = await this.call<{
-      envelope: import("./types").Envelope;
-    }>("fileGet", { fileId: photo.fileId });
+      envelope: Envelope;
+      parts?: number;
+    }>("fileGet", { fileId, ...(segmented ? { part: 0 } : {}) }).then(async (first) => {
+      checkSession();
+      if (!segmented || first.parts === undefined) return first; // Older server.
+      const count = first.parts;
+      if (!Number.isSafeInteger(count) || count < 1 || count > Math.ceil(1500000 / PHOTO_DOWNLOAD_PART_SIZE))
+        throw new AppError("INVALID_RESPONSE", "照片分段数量不正确");
+      const chunks = [first.envelope.ciphertext];
+      for (let part = 1; part < count; part++) {
+        const next = await this.call<{ envelope: Envelope; parts: number }>("fileGet", { fileId, part });
+        checkSession();
+        if (next.parts !== count)
+          throw new AppError("INVALID_RESPONSE", "照片分段不完整");
+        chunks.push(next.envelope.ciphertext);
+      }
+      return { envelope: { ...first.envelope, ciphertext: chunks.join("") } };
+    });
+    checkSession();
     const key = unb64(
       visibility === "private"
-        ? this.secrets!.personalKey
-        : this.secrets!.spaceKeys[envelope.keyVersion],
+        ? session.personalKey
+        : session.spaceKeys[envelope.keyVersion],
     );
     return open<{ base64: string }>(
       envelope,
       key,
-      `Us/file/1/${this.space!.id}/${photo.id}/${visibility}`,
+      `Us/file/1/${space.id}/${photo.id}/${visibility}`,
     ).base64;
   }
   async saveDraft(data: unknown) {

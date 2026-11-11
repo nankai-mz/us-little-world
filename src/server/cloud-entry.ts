@@ -14,6 +14,7 @@ cloud.init({ env: cloud.DYNAMIC_CURRENT_ENV });
 const db = cloud.database({ throwOnNotFound: false });
 const repo = cloudRepository(db, testBuild ? "test_" : "");
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
+const photoReads = new Map<string, { expiresAt: number; content: Promise<string> }>();
 function checkFileScope(id: string) {
   if (
     testBuild &&
@@ -39,10 +40,24 @@ const serverDeps = {
     ).fileID,
   fileGet: async (id: string) => {
     checkFileScope(id);
-    return (await cloud.downloadFile({ fileID: id })).fileContent.toString("utf8");
+    const cached = photoReads.get(id);
+    if (cached && cached.expiresAt > Date.now()) return cached.content;
+    photoReads.delete(id);
+    if (photoReads.size >= 8) photoReads.delete(photoReads.keys().next().value!);
+    const content = cloud.downloadFile({ fileID: id }).then(
+      (result: { fileContent: Buffer }) => result.fileContent.toString("utf8"),
+    ) as Promise<string>;
+    photoReads.set(id, { content, expiresAt: Date.now() + 20000 });
+    try {
+      return await content;
+    } catch (error) {
+      if (photoReads.get(id)?.content === content) photoReads.delete(id);
+      throw error;
+    }
   },
   fileDelete: async (id: string) => {
     checkFileScope(id);
+    photoReads.delete(id);
     const result = await cloud.deleteFile({ fileList: [id] });
     if (
       !Array.isArray(result.fileList) ||

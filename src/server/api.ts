@@ -7,7 +7,7 @@ import {
   type ApiReply,
 } from "../core/types";
 import { API_PROTOCOL, APP_VERSION } from "../core/protocol";
-import { MAX_PHOTO_CIPHERTEXT, PHOTO_UPLOAD_PART_SIZE } from "../core/photos";
+import { MAX_PHOTO_CIPHERTEXT, PHOTO_DOWNLOAD_PART_SIZE, PHOTO_UPLOAD_PART_SIZE } from "../core/photos";
 import {
   AI_TASKS,
   AI_TEXT_LIMIT,
@@ -693,9 +693,17 @@ export function createApi(deps: ServerDeps) {
           );
           if (action === "fileGet") {
             ensure(deps.fileGet, "NOT_CONFIGURED", "文件服务尚未配置");
-            result = {
-              envelope: JSON.parse(await deps.fileGet(file.storageId)),
-            };
+            const part = input.part;
+            ensure(part === undefined || (Number.isSafeInteger(part) && part >= 0 &&
+              part < Math.ceil(1500000 / PHOTO_DOWNLOAD_PART_SIZE)), "INVALID_REQUEST", "照片分段编号不正确");
+            const envelope = JSON.parse(await deps.fileGet(file.storageId)) as Envelope;
+            result = { envelope };
+            if (part !== undefined) {
+              const parts = Math.ceil(envelope.ciphertext.length / PHOTO_DOWNLOAD_PART_SIZE);
+              ensure(part < parts, "INVALID_REQUEST", "照片分段编号不正确");
+              const offset = part * PHOTO_DOWNLOAD_PART_SIZE;
+              result = { envelope: { ...envelope, ciphertext: envelope.ciphertext.slice(offset, offset + PHOTO_DOWNLOAD_PART_SIZE) }, parts };
+            }
           } else {
             ensure(
               file.creatorId === userId,

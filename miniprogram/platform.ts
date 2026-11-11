@@ -1,5 +1,5 @@
 import "./polyfill";
-import { AppError, type RandomSource } from "../src/core/types";
+import { AppError, type Attachment, type RandomSource, type Visibility } from "../src/core/types";
 import { createTransport } from "../src/core/transport";
 import { UsService } from "../src/core/service";
 import { cloudTarget } from "./cloud";
@@ -41,7 +41,7 @@ const transport = createTransport(async (action, data) => {
     config: { env },
     data: { action, data },
   };
-  if (action === "filePut" || action.startsWith("fileUpload")) {
+  if (action === "fileGet" || action === "filePut" || action.startsWith("fileUpload")) {
     return new Promise((resolve, reject) => {
       const startedAt = Date.now();
       if (isTestSpace) console.info("[photo]", action, "sent");
@@ -73,31 +73,76 @@ export const service = new UsService(
   },
   rng,
 );
-export async function photoPath(
-  entry: import("../src/core/types").Entry,
-  photo: import("../src/core/types").Attachment,
-): Promise<string> {
+let photoGeneration = 0;
+let photoFileSequence = 0;
+const cachedPhotos = new Map<string, string>();
+const pendingPhotos = new Map<string, Promise<string>>();
+let photoSession = service.secrets;
+
+function photoCacheKey(visibility: Visibility, photo: Attachment) {
+  return JSON.stringify([visibility, photo.id, photo.fileId, photo.mime]);
+}
+
+export function cachedPhotoPath(visibility: Visibility, photo: Attachment) {
   if (photo.sample) {
-    if (!["coffee", "sea", "sunset"].includes(photo.sample))
-      throw new AppError("INVALID_IMAGE", "未知的示例照片");
-    return `/assets/${photo.sample}.png`;
+    return ["coffee", "sea", "sunset"].includes(photo.sample)
+      ? `/assets/${photo.sample}.png`
+      : "";
   }
+  if (photoSession !== service.secrets) clearDecryptedFiles();
+  return service.secrets ? cachedPhotos.get(photoCacheKey(visibility, photo)) || "" : "";
+}
+
+export function forgetPhotoPath(visibility: Visibility, photo: Attachment, url: string) {
+  const key = photoCacheKey(visibility, photo);
+  if (cachedPhotos.get(key) !== url) return;
+  cachedPhotos.delete(key);
+  try { wx.getFileSystemManager().unlinkSync(url); } catch {}
+}
+
+export async function photoPath(
+  visibility: Visibility,
+  photo: Attachment,
+  localBytes?: string,
+): Promise<string> {
+  const cached = cachedPhotoPath(visibility, photo);
+  if (cached) return cached;
   const session = service.secrets;
-  if (!session || !/^[A-Za-z0-9_-]{1,80}$/.test(photo.id))
+  if (!session || photo.sample || !/^[A-Za-z0-9_-]{1,80}$/.test(photo.id))
     throw new AppError("INVALID_IMAGE", "照片标识不正确或空间已锁定");
+  const key = photoCacheKey(visibility, photo);
+  const pending = pendingPhotos.get(key);
+  if (pending) return pending;
+  const generation = photoGeneration;
+  const active = () => generation === photoGeneration && session === service.secrets;
   const extension = photo.mime === "image/png" ? "png" : photo.mime === "image/webp" ? "webp" : "jpg";
-  const path = `${wx.env.USER_DATA_PATH}/${photoPrefix}${entry.visibility}-${photo.id}.${extension}`;
-  try {
-    wx.getFileSystemManager().accessSync(path);
+  const path = `${wx.env.USER_DATA_PATH}/${photoPrefix}${visibility}-${photo.id}-${++photoFileSequence}.${extension}`;
+  const load = (async () => {
+    const value = localBytes ?? await service.readPhoto(photo, visibility, active);
+    if (!active()) throw new AppError("PHOTO_CACHE_EXPIRED", "照片缓存已过期");
+    const fs = wx.getFileSystemManager();
+    await new Promise<void>((resolve, reject) => fs.writeFile({
+      filePath: path, data: value, encoding: "base64", success: () => resolve(), fail: reject,
+    }));
+    if (!active()) {
+      try { fs.unlinkSync(path); } catch {}
+      throw new AppError("PHOTO_CACHE_EXPIRED", "照片缓存已过期");
+    }
+    cachedPhotos.set(key, path);
     return path;
-  } catch {}
-  const value = await service.readPhoto(photo, entry.visibility);
-  if (session !== service.secrets || !session)
-    throw new AppError("LOCKED", "请先解锁");
-  wx.getFileSystemManager().writeFileSync(path, value, "base64");
-  return path;
+  })();
+  pendingPhotos.set(key, load);
+  try {
+    return await load;
+  } finally {
+    if (pendingPhotos.get(key) === load) pendingPhotos.delete(key);
+  }
 }
 export function clearDecryptedFiles() {
+  photoGeneration++;
+  photoSession = service.secrets;
+  cachedPhotos.clear();
+  pendingPhotos.clear();
   const fs = wx.getFileSystemManager();
   try {
     for (const name of fs.readdirSync(wx.env.USER_DATA_PATH))
