@@ -226,9 +226,9 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-export function App() {
-  const [service, setService] = useState<UsService | null>(null);
-  const [mode, setMode] = useState<"demo" | "personal">("demo");
+export function App({ hosted }: { hosted?: { service: UsService; owner: boolean; signOut: () => Promise<void> } }) {
+  const [service, setService] = useState<UsService | null>(hosted?.service ?? null);
+  const [mode, setMode] = useState<"demo" | "personal">(hosted ? "personal" : "demo");
   const [revision, setRevision] = useState(0);
   const [page, setPage] = useState("home");
   const [section, setSection] = useState("timeline");
@@ -240,7 +240,9 @@ export function App() {
   const [password, setPassword] = useState("");
   const [spaceName, setSpaceName] = useState("我们的小世界");
   const [startDate, setStartDate] = useState(today());
-  const [welcomeMode, setWelcomeMode] = useState("welcome");
+  const [welcomeMode, setWelcomeMode] = useState(hosted?.service.vault ? "unlock" : "welcome");
+  const [joinCode, setJoinCode] = useState("");
+  const [verificationCode, setVerificationCode] = useState("");
   const [recovery, setRecovery] = useState("");
   const [backupPassword, setBackupPassword] = useState("");
   const [search, setSearch] = useState("");
@@ -283,8 +285,10 @@ export function App() {
     setAiConsent(false);
     setRecovery("");
     setBackupPassword("");
+    setVerificationCode("");
   }, []);
   const unlocked = !!service?.ready;
+  const sessionOpen = !!service?.secrets;
   useEffect(() => {
     if (!unlocked) {
       setRecovery("");
@@ -339,6 +343,7 @@ export function App() {
     };
   }, []);
   useEffect(() => {
+    if (hosted) return;
     let canceled = false;
     const selected = localStorage.getItem("us.mode") as
       | "demo"
@@ -362,7 +367,7 @@ export function App() {
     return () => {
       canceled = true;
     };
-  }, [notify]);
+  }, [notify, hosted]);
   useEffect(() => {
     if (!service?.ready) return;
     const id = setInterval(() => {
@@ -372,9 +377,9 @@ export function App() {
         .catch(() => {});
     }, 30000);
     return () => clearInterval(id);
-  }, [service, revision > 0]);
+  }, [service, unlocked]);
   useEffect(() => {
-    if (!service?.ready) return;
+    if (!service || !sessionOpen) return;
     let hiddenAt = 0;
     const change = () => {
       if (document.hidden) hiddenAt = Date.now();
@@ -388,7 +393,7 @@ export function App() {
     };
     document.addEventListener("visibilitychange", change);
     return () => document.removeEventListener("visibilitychange", change);
-  }, [service, revision > 0]);
+  }, [service, sessionOpen]);
   async function enterDemo(confirmReset = false) {
     await run(async () => {
       const s = createBrowserService("demo");
@@ -418,11 +423,14 @@ export function App() {
   }
   async function createPersonal() {
     await run(async () => {
-      const s = createBrowserService("personal");
-      const key = await s.create(password, spaceName, startDate);
+      const s = hosted?.service ?? createBrowserService("personal");
+      const key = welcomeMode === "join"
+        ? await s.join(password, joinCode)
+        : await s.create(password, spaceName, startDate);
       setService(s);
       setMode("personal");
-      localStorage.setItem("us.mode", "personal");
+      if (!hosted) localStorage.setItem("us.mode", "personal");
+      setJoinCode("");
       setRecovery(key);
       setModal("recovery");
       setPassword("");
@@ -564,7 +572,9 @@ export function App() {
               ? mode === "demo"
                 ? "示例使用临时随机口令，没有需要你记住的默认密码。"
                 : "输入本机解锁口令，打开你的加密手账。"
-              : "微信版是我们的目的地，这里可以先体验。"}
+              : hosted
+                ? "请创建或加入你们的双人空间。"
+                : "微信版是我们的目的地，这里可以先体验。"}
           </p>
           {welcomeMode === "unlock" && mode === "demo" ? (
             <div className="demo-session-ended">
@@ -581,6 +591,13 @@ export function App() {
                 重新进入示例前会询问是否重建；如果要保留修改，可先使用已导出的备份恢复。
               </p>
             </div>
+          ) : welcomeMode === "welcome" && hosted ? (
+            <>
+              <button className="primary full" onClick={() => setWelcomeMode(hosted.owner ? "create" : "join")}>
+                {hosted.owner ? "创建双人空间" : "输入邀请码加入"}
+              </button>
+              <button className="secondary full" onClick={() => setModal("restore")}>使用备份恢复</button>
+            </>
           ) : welcomeMode === "welcome" ? (
             <>
               <button
@@ -641,12 +658,17 @@ export function App() {
                   </Field>
                 </>
               )}
+              {welcomeMode === "join" && (
+                <Field label="一次性邀请码">
+                  <input value={joinCode} maxLength={128} onChange={(event) => setJoinCode(event.target.value)} required />
+                </Field>
+              )}
               <Field label="本机解锁口令（至少 10 位）">
                 <input
                   type="password"
                   value={password}
                   autoComplete={
-                    welcomeMode === "create"
+                      ["create", "join"].includes(welcomeMode)
                       ? "new-password"
                       : "current-password"
                   }
@@ -660,7 +682,7 @@ export function App() {
                   ? "正在打开…"
                   : welcomeMode === "unlock"
                     ? "打开小世界"
-                    : "创建我们的空间"}
+                    : welcomeMode === "join" ? "加入双人空间" : "创建我们的空间"}
               </button>
               <button
                 className="text-button full"
@@ -680,6 +702,7 @@ export function App() {
               )}
             </form>
           )}
+          {hosted && <button className="text-button full" disabled={busy} onClick={() => run(hosted.signOut)}>退出网站账号</button>}
           <div className="welcome-note">
             <Leaf size={20} />
             <span>
@@ -715,6 +738,7 @@ export function App() {
           <Modal title="恢复加密备份" close={close}>
             <RestoreForm
               service={service}
+              hosted={!!hosted}
               mode={mode}
               run={run}
               done={() => {
@@ -835,7 +859,7 @@ export function App() {
               : relationship?.data.body || "我 & 你"}
           </strong>
           <span className="tiny">
-            {mode === "demo" ? "我们的示例空间" : "我们的本机空间"}
+            {hosted ? "我们的双人空间" : mode === "demo" ? "我们的示例空间" : "我们的本机空间"}
           </span>
         </div>
         <span className="nav-label">我们的每一天</span>
@@ -885,7 +909,7 @@ export function App() {
             <ChevronRight size={14} />
           </button>
           <div className="local-mode">
-            <span /> 本机{mode === "demo" ? "示例" : "加密"}模式
+            <span /> {hosted ? "双人同步" : `本机${mode === "demo" ? "示例" : "加密"}模式`}
           </div>
         </div>
       </aside>
@@ -2385,7 +2409,7 @@ export function App() {
                 <p className="muted">愿每个平凡的日子，都有小小的喜欢。</p>
                 <span className="private-badge">
                   <LockKeyhole size={13} />{" "}
-                  {mode === "demo" ? "本机示例空间" : "本机加密空间"}
+                  {hosted ? "私密双人空间" : mode === "demo" ? "本机示例空间" : "本机加密空间"}
                 </span>
                 <div className="profile-counts">
                   <div>
@@ -2414,6 +2438,7 @@ export function App() {
                 >
                   <LockKeyhole size={15} /> 锁上我的小世界
                 </button>
+                {hosted && <button className="text-button full" disabled={busy} onClick={() => run(hosted.signOut)}>退出网站账号</button>}
               </section>
               <section className="card settings-list">
                 {[
@@ -2780,15 +2805,17 @@ export function App() {
                     format: "UsBackup",
                     version: 2,
                     vault: recoveryOnlyVault(service.vault!),
-                    database: service.storage.get("database"),
-                    files: Object.fromEntries(
-                      Object.keys(localStorage)
-                        .filter((k) => k.startsWith(`us.${mode}.file.`))
-                        .map((k) => [
-                          k.replace(`us.${mode}.`, ""),
-                          localStorage.getItem(k),
-                        ]),
-                    ),
+                    ...(!hosted && {
+                      database: service.storage.get("database"),
+                      files: Object.fromEntries(
+                        Object.keys(localStorage)
+                          .filter((k) => k.startsWith(`us.${mode}.file.`))
+                          .map((k) => [
+                            k.replace(`us.${mode}.`, ""),
+                            localStorage.getItem(k),
+                          ]),
+                      ),
+                    }),
                   },
                   null,
                   2,
@@ -2877,8 +2904,19 @@ export function App() {
             </code>
           </Field>
           <p className="fineprint">
-            本机预览仅支持当前浏览器。跨微信账号邀请、密钥交换和设备管理在原生小程序中执行。
+            {hosted ? "将你的设备安全码发给另一位成员，通过可信渠道核对后再发送密钥。"
+              : "本机预览仅支持当前浏览器。跨微信账号邀请、密钥交换和设备管理在原生小程序中执行。"}
           </p>
+          {hosted && (
+            <>
+              <Field label="对方的设备安全码">
+                <input value={verificationCode} onChange={(event) => setVerificationCode(event.target.value)} />
+              </Field>
+              <button className="text-button" disabled={busy} onClick={() =>
+                run(async () => setDevices(await service.devices()))
+              }>刷新设备列表</button>
+            </>
+          )}
           <div className="device-list">
             {devices.map((d) => (
               <div key={d.id}>
@@ -2890,6 +2928,11 @@ export function App() {
                   </strong>
                   <small>{d.id.slice(0, 16)}…</small>
                 </span>
+                {hosted && service.ready && d.id !== service.secrets!.deviceId && (
+                  <button className="text-button" disabled={busy || !verificationCode.trim()} onClick={() =>
+                    run(() => service.transfer(d, verificationCode.trim()), "空间密钥已发送")
+                  }>发送空间密钥</button>
+                )}
                 {d.id !== service.secrets!.deviceId &&
                   d.userId === service.userId && (
                     <button
@@ -2909,6 +2952,9 @@ export function App() {
               </div>
             ))}
           </div>
+          {hosted && <button className="secondary full" disabled={busy || !verificationCode.trim()} onClick={() =>
+            run(() => service.receive(verificationCode.trim()), "空间密钥已接收")
+          }>接收空间密钥</button>}
           <button
             className="secondary full"
             onClick={() =>
@@ -2968,7 +3014,9 @@ export function App() {
         <Modal title="导出可直接阅读的记录？" close={close}>
           <p className="muted">
             导出的 JSON
-            文件不再受应用加密保护，包含你可见的日记、计划、留言和照片说明。照片文件包含在加密备份中。
+              文件不再受应用加密保护，包含你可见的日记、计划、留言和照片说明。
+              {hosted ? "网站的加密密钥备份用于恢复解锁密钥，照片仍保存在服务端。"
+                : "照片文件包含在加密备份中。"}
           </p>
           <button
             className="primary full"
@@ -2989,6 +3037,7 @@ export function App() {
         <Modal title="恢复加密备份" close={close}>
           <RestoreForm
             service={service}
+            hosted={!!hosted}
             mode={mode}
             run={run}
             done={() => {
@@ -3058,12 +3107,12 @@ export function App() {
           >
             申请或确认关闭空间
           </button>
-          <button
+          {!hosted && <button
             className="text-button full danger"
             onClick={() => setModal("clear-local")}
           >
             清除此模式的本机数据
-          </button>
+          </button>}
         </Modal>
       )}
       {modal === "close-space" && (
@@ -3094,7 +3143,7 @@ export function App() {
             onClick={() => {
               service.lock();
               close();
-              setWelcomeMode("create");
+              setWelcomeMode(hosted && !hosted.owner ? "join" : "create");
               update();
             }}
           >
@@ -3555,11 +3604,13 @@ function Editor({
 
 function RestoreForm({
   service,
+  hosted,
   mode,
   run,
   done,
 }: {
   service: UsService | null;
+  hosted?: boolean;
   mode: "demo" | "personal";
   run: <T>(fn: () => Promise<T>, success?: string) => Promise<T | undefined>;
   done: () => void;
@@ -3572,16 +3623,24 @@ function RestoreForm({
       onSubmit={(e) => {
         e.preventDefault();
         run(async () => {
-          const values = await stageBackup(backup, key, password);
-          commitBackup(mode, values);
-          sessionStorage.removeItem("us.demo.password");
-          done();
-          window.location.reload();
+          if (hosted) {
+            if (!service || backup?.format !== "UsBackup" || backup.version !== 2 || !backup.vault)
+              throw new Error("请选择此网站导出的加密密钥备份");
+            await service.recover(backup.vault, key, password);
+            done();
+          } else {
+            const values = await stageBackup(backup, key, password);
+            commitBackup(mode, values);
+            sessionStorage.removeItem("us.demo.password");
+            done();
+            window.location.reload();
+          }
         }, "备份已恢复，请用新口令解锁");
       }}
     >
       <p className="fineprint">
-        导入会替换当前模式的本机数据库。请先保存当前备份；本机备份恢复不能迁移到不同微信账号。
+        {hosted ? "使用属于当前网站账号和空间的加密备份，恢复这台设备的解锁密钥。"
+          : "导入会替换当前模式的本机数据库。请先保存当前备份；本机备份恢复不能迁移到不同微信账号。"}
       </p>
       <Field label="加密备份 JSON">
         <input

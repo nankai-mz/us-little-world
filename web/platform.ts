@@ -7,6 +7,29 @@ import {
 } from "../src/core/types";
 import { browserRandom, hashText, recoverVault } from "../src/core/crypto";
 import { UsService } from "../src/core/service";
+import { createTransport } from "../src/core/transport";
+
+export function createHostedService(account: string, sessionEnded: () => void) {
+  const prefix = `us.web.${account}.`;
+  const transport = createTransport(async (action, data) => {
+    const response = await fetch("/api/space", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Us-Account": account },
+      body: JSON.stringify({ action, data }),
+    });
+    if (response.status === 401) {
+      sessionEnded();
+      throw new AppError("AUTH_REQUIRED", "网站登录已过期，请重新登录");
+    }
+    if (response.status >= 500) throw new Error("Website unavailable");
+    return response.json();
+  });
+  return new UsService(transport, {
+    get: (key) => localStorage.getItem(prefix + key),
+    set: (key, value) => localStorage.setItem(prefix + key, value),
+    remove: (key) => localStorage.removeItem(prefix + key),
+  }, browserRandom);
+}
 export function createBrowserService(mode: "demo" | "personal") {
   const prefix = `us.${mode}.`;
   const storage: StorageAdapter = {

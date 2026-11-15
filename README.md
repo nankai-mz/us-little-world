@@ -6,6 +6,41 @@
 
 ## 马上查看
 
+### 双人同步网页版
+
+网页同步服务使用 Node.js 22.13 或更高版本和 SQLite。日记和照片在设备上加密后同步。
+浏览器需要安全上下文。在服务器本机可用 `http://127.0.0.1:5180/`，其它设备通过 HTTPS 访问。
+
+首次启动，在 PowerShell 中运行以下命令生成两个随机网站密码。
+已有 `.env.web` 时沿用原配置。请保管好此文件，并分别向两位成员提供各自的密码。
+
+```powershell
+if (-not (Test-Path -LiteralPath .env.web)) {
+  $webAccounts = [ordered]@{
+    member1 = [guid]::NewGuid().ToString('N')
+    member2 = [guid]::NewGuid().ToString('N')
+  }
+  $webJson = $webAccounts | ConvertTo-Json -Compress
+  Set-Content -LiteralPath .env.web -Value "US_WEB_ACCOUNTS='$webJson'" -Encoding utf8
+}
+npm ci
+npm run build:web
+npm run serve:web
+```
+
+1. 排在配置首位的账号登录网页并创建空间，设置本机解锁口令。
+2. 在「我的空间 → 设备与安全」生成邀请码。另一位成员登录自己的账号，输入邀请码并设置自己的本机解锁口令。
+3. 双方在「设备与安全」互相核对设备安全码。创建者选择对方设备发送空间密钥，对方输入创建者的安全码接收密钥。之后可刷新同步日记和照片。
+
+网站密码与本机解锁口令应分别设置。加密密钥备份用于恢复设备上的密钥。服务端数据库
+默认保存于 `artifacts/private-web/us.sqlite`，包含同步记录和照片密文。备份 SQLite 时用 SQLite 的备份功能，或停服后复制数据库。
+服务重启后需重新登录，网站账号名用于绑定加密空间，应保持稳定。
+
+上线时由 HTTPS 反向代理连接本机的服务端口，并将 `US_WEB_ORIGIN` 设为浏览器使用的 HTTPS 源。
+可用 `US_WEB_PORT` 和 `US_WEB_DB` 指定本机端口与数据库路径。当前网站从空白空间开始，原微信日记和照片的迁移需要单独处理。
+
+### 单机预览
+
 ```powershell
 cd 'E:\双人小程序'
 npm ci --registry=https://registry.npmjs.org

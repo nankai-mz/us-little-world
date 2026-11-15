@@ -16,7 +16,9 @@
     "preflight": "node scripts/preflight.mjs",
     "configure": "node scripts/configure.mjs",
     "release": "npm test && npm run build && npm run check:mini && npm run check:sdk && npm run preflight && pwsh -File scripts/package.ps1",
-    "preview": "vite preview --host 127.0.0.1 --port 5173"
+    "preview": "vite preview --host 127.0.0.1 --port 5173",
+    "build:web": "vite build",
+    "serve:web": "node --env-file-if-exists=.env.web scripts/serve-web.mjs"
   },
   "engines": {
     "node": ">=22.12.0"
