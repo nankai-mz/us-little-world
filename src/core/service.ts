@@ -21,22 +21,25 @@ import {
   b64,
   createTransfer,
   decryptRecord,
+  deriveVaultKey,
   encryptRecord,
   fingerprint,
   hashText,
-  lockVault,
   newSecrets,
   open,
+  openVaultWithKey,
   publicKeys,
   randomId,
   recoverVault,
   recoveryOnlyVault,
   seal,
+  sealVaultWithKey,
   unb64,
   unlockVault,
+  type VaultKey,
 } from "./crypto";
 import { addDays, dayNumber, today } from "./date";
-import { canOpenCapsule, newPet, petAction, QUESTIONS } from "./domain";
+import { canOpenCapsule, newPet, petAction, QUESTIONS, SPACE_MEMBER_NAMES } from "./domain";
 import { API_PROTOCOL, type ConnectionStatus } from "./protocol";
 import { base64ByteLength, MAX_PHOTO_BYTES, PHOTO_DOWNLOAD_PART_SIZE, PHOTO_UPLOAD_PART_SIZE } from "./photos";
 import { validateNewPassword } from "./password";
@@ -59,7 +62,7 @@ export class UsService {
     string,
     { serial: number; entry: Entry | null }
   >();
-  private password = "";
+  private vaultKey: VaultKey | null = null;
   constructor(
     public transport: Transport,
     public storage: StorageAdapter,
@@ -87,21 +90,48 @@ export class UsService {
     }
   }
   async persistSecrets() {
-    if (!this.secrets || !this.password)
+    const access = this.vaultKey;
+    if (!this.secrets || !access)
       throw new AppError("LOCKED", "请先解锁");
-    const { vault, recoveryKey } = await lockVault(
+    const { vault, recoveryKey } = await sealVaultWithKey(
       this.secrets,
-      this.password,
+      access,
       this.rng,
     );
+    if (access !== this.vaultKey) throw new AppError("LOCKED", "请先解锁");
     this.storage.set("vault", JSON.stringify(vault));
     return recoveryKey;
   }
+  private setVaultKey(access: VaultKey) {
+    this.vaultKey?.key.fill(0);
+    this.vaultKey = access;
+  }
+  getUnlockKey(): VaultKey | null {
+    const access = this.vaultKey;
+    return access && { salt: access.salt, key: access.key.slice() };
+  }
   async unlock(password: string) {
-    if (!this.vault) throw new AppError("KEY_NOT_FOUND", "本机尚未建立密钥");
-    this.secrets = await unlockVault(this.vault, password);
-    this.password = password;
-    await this.bootstrap();
+    const vault = this.vault;
+    if (!vault) throw new AppError("KEY_NOT_FOUND", "本机尚未建立密钥");
+    const access = await deriveVaultKey(password, vault.salt);
+    try {
+      await this.unlockWithKey(access);
+    } finally {
+      access.key.fill(0);
+    }
+  }
+  async unlockWithKey(access: VaultKey) {
+    const vault = this.vault;
+    if (!vault) throw new AppError("KEY_NOT_FOUND", "本机尚未建立密钥");
+    const secrets = openVaultWithKey(vault, access);
+    this.secrets = secrets;
+    this.setVaultKey({ salt: access.salt, key: access.key.slice() });
+    try {
+      await this.bootstrap();
+    } catch (error) {
+      if (this.secrets === secrets) this.lock();
+      throw error;
+    }
   }
   async createBackup(password: string) {
     const session = this.secrets;
@@ -119,10 +149,7 @@ export class UsService {
       verified.spaceId !== session.spaceId
     )
       throw new AppError("LOCKED", "会话已改变，请重新解锁");
-    if (!verified.recoveryKey) {
-      this.password = password;
-      await this.persistSecrets();
-    }
+    if (!verified.recoveryKey) await this.persistSecrets();
     if (this.secrets !== session)
       throw new AppError("LOCKED", "会话已改变，请重新解锁");
     return {
@@ -144,8 +171,8 @@ export class UsService {
       throw new AppError("IDENTITY_MISMATCH", "备份不属于当前账号和空间");
     if (!["active", "closing"].includes(boot.space.status))
       throw new AppError("SPACE_CLOSED", "这个空间已经关闭，无法恢复云端访问");
+    this.setVaultKey(await deriveVaultKey(password, b64(await this.rng(16))));
     this.secrets = recovered;
-    this.password = password;
     this.space = boot.space;
     this.secrets.deviceId = await randomId(this.rng); // A recovered device never reuses a revoked device ID.
     this.secrets.encryptionSecret = b64(await this.rng(32));
@@ -193,8 +220,8 @@ export class UsService {
     }>("bootstrap");
     if (boot.space?.status === "active")
       throw new AppError("ALREADY_BOUND", "当前账号已有空间，请恢复密钥");
+    this.setVaultKey(await deriveVaultKey(password, b64(await this.rng(16))));
     this.secrets = await newSecrets(this.rng, boot.userId);
-    this.password = password;
     this.space = await this.transport.call<Space>("createSpace");
     this.secrets.spaceId = this.space.id;
     this.secrets.spaceKeys["1"] = b64(await this.rng(32));
@@ -203,7 +230,7 @@ export class UsService {
     await this.save({
       kind: "anniversary",
       title,
-      body: demo ? "小予 & 阿辰" : "我 & 你",
+      body: demo ? SPACE_MEMBER_NAMES.join(" & ") : "我 & 你",
       date: startDate,
       category: "relationship",
       yearly: true,
@@ -222,15 +249,42 @@ export class UsService {
     const { userId } = await this.transport.call<{ userId: string }>(
       "bootstrap",
     );
-    this.secrets = await newSecrets(this.rng, userId);
-    this.password = password;
-    this.space = await this.transport.call<Space>("joinSpace", {
-      token: token.trim(),
-    });
-    this.secrets.spaceId = this.space.id;
+    const secrets = await newSecrets(this.rng, userId);
+    const access = await deriveVaultKey(password, b64(await this.rng(16)));
+    let space: Space;
+    try {
+      space = await this.transport.call<Space>("joinSpace", { token: token.trim() });
+    } catch (error) {
+      access.key.fill(0);
+      throw error;
+    }
+    secrets.spaceId = space.id;
+    this.secrets = secrets;
+    this.setVaultKey(access);
+    this.space = space;
     const recoveryKey = await this.persistSecrets();
     await this.registerDevice();
     return recoveryKey;
+  }
+  async setUpDevice(password: string) {
+    if (this.vault)
+      throw new AppError("LOCAL_KEYS_EXIST", "此浏览器已有密钥，请使用本机口令解锁");
+    validateNewPassword(password);
+    const { userId, space } = await this.transport.call<{ userId: string; space: Space | null }>("bootstrap");
+    if (space?.status !== "active" || !space.members.includes(userId))
+      throw new AppError("MEMBER_REQUIRED", "当前账号没有可登记设备的双人空间");
+    const secrets = await newSecrets(this.rng, userId);
+    secrets.spaceId = space.id;
+    this.setVaultKey(await deriveVaultKey(password, b64(await this.rng(16))));
+    this.secrets = secrets;
+    this.space = space;
+    try {
+      await this.persistSecrets();
+      await this.registerDevice();
+    } catch (error) {
+      this.lock();
+      throw error;
+    }
   }
   async registerDevice() {
     if (!this.secrets || !this.space) return;
@@ -834,7 +888,8 @@ export class UsService {
     this.lastSyncedAt = 0;
     this.lastSyncError = "";
     this.secrets = null;
-    this.password = "";
+    this.vaultKey?.key.fill(0);
+    this.vaultKey = null;
     this.entries = [];
     this.space = null;
   }

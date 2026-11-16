@@ -1,6 +1,7 @@
 import { AppError, type Entry, type Pet } from "./types";
 import { addDays, today } from "./date";
 export { QUESTIONS, QUIZ } from "./questions";
+export const SPACE_MEMBER_NAMES = ["臻", "悦"] as const;
 export const newPet = (): Pet => ({
   name: "糯米",
   exp: 0,

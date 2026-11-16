@@ -138,16 +138,21 @@ export async function newSecrets(
     spaceKeys: {},
   };
 }
-async function passwordKey(password: string, salt: string) {
+export interface VaultKey {
+  salt: string;
+  key: Uint8Array;
+}
+export async function deriveVaultKey(password: string, salt: string): Promise<VaultKey> {
   if (password.length < 10)
     throw new AppError("WEAK_PASSWORD", "请使用至少 10 位的解锁口令");
-  return scryptAsync(utf8(password), unb64(salt), {
+  const key = await scryptAsync(utf8(password), unb64(salt), {
     N: 32768,
     r: 8,
     p: 1,
     dkLen: 32,
     maxmem: 40 * 1024 * 1024,
   });
+  return { salt, key };
 }
 export async function lockVault(
   secrets: Secrets,
@@ -155,7 +160,19 @@ export async function lockVault(
   rng: RandomSource,
   recoveryKey?: string,
 ): Promise<{ vault: Vault; recoveryKey: string }> {
-  const salt = b64(await rng(16));
+  const access = await deriveVaultKey(password, b64(await rng(16)));
+  try {
+    return await sealVaultWithKey(secrets, access, rng, recoveryKey);
+  } finally {
+    access.key.fill(0);
+  }
+}
+export async function sealVaultWithKey(
+  secrets: Secrets,
+  { salt, key }: VaultKey,
+  rng: RandomSource,
+  recoveryKey?: string,
+): Promise<{ vault: Vault; recoveryKey: string }> {
   const previous = recoveryKey || secrets.recoveryKey;
   const recovery = previous
     ? fromHex(previous.replace(/\s/g, ""))
@@ -163,14 +180,13 @@ export async function lockVault(
   if (recovery.length !== 32)
     throw new AppError("INVALID_KEY", "恢复密钥必须为 64 位十六进制字符");
   secrets.recoveryKey = toHex(recovery);
-  const pk = await passwordKey(password, salt);
   try {
     return {
       recoveryKey: toHex(recovery),
       vault: {
         version: 1,
         salt,
-        passwordEnvelope: await seal(secrets, pk, "Us/vault/password/1", rng),
+        passwordEnvelope: await seal(secrets, key, "Us/vault/password/1", rng),
         recoveryEnvelope: await seal(
           secrets,
           recovery,
@@ -180,7 +196,6 @@ export async function lockVault(
       },
     };
   } finally {
-    pk.fill(0);
     recovery.fill(0);
   }
 }
@@ -188,12 +203,17 @@ export async function unlockVault(
   vault: Vault,
   password: string,
 ): Promise<Secrets> {
-  const key = await passwordKey(password, vault.salt);
+  const access = await deriveVaultKey(password, vault.salt);
   try {
-    return open(vault.passwordEnvelope, key, "Us/vault/password/1");
+    return openVaultWithKey(vault, access);
   } finally {
-    key.fill(0);
+    access.key.fill(0);
   }
+}
+export function openVaultWithKey(vault: Vault, access: VaultKey): Secrets {
+  if (vault.salt !== access.salt || access.key.length !== 32)
+    throw new AppError("DECRYPT_FAILED", "本机密钥已更换，请重新解锁");
+  return open(vault.passwordEnvelope, access.key, "Us/vault/password/1");
 }
 export function recoveryOnlyVault(vault: RecoveryVault): RecoveryVault {
   return { version: 1, recoveryEnvelope: { ...vault.recoveryEnvelope } };

@@ -2505,6 +2505,27 @@ summary {
   flex-direction: column;
   justify-content: center;
 }
+.key-setup {
+  min-height: 100vh;
+  display: grid;
+  align-items: center;
+  justify-items: center;
+  padding: 24px 16px;
+}
+.key-setup .welcome-form {
+  width: min(100%, 520px);
+  padding: clamp(20px, 6vw, 40px);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+}
+.key-setup p {
+  line-height: 1.8;
+  margin: 0 0 20px;
+}
+.key-setup [role="status"],
+.key-setup .text-button {
+  margin-top: 16px;
+}
 .welcome-form .flower {
   color: var(--muted);
   stroke-width: 1.1;

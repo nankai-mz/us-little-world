@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { App } from "./App";
 import { createHostedService } from "./platform";
+import { forgetUnlock } from "./rememberedUnlock";
 
 interface WebsiteSession {
   account: string | null;
@@ -30,7 +31,10 @@ export function HostedWeb() {
     setPassword("");
   }, []);
   const account = session?.account;
-  const service = useMemo(() => account ? createHostedService(account, clearSession) : null, [account, clearSession]);
+  const service = useMemo(() => account ? createHostedService(account, () => {
+    void forgetUnlock(account).catch(() => {});
+    clearSession();
+  }) : null, [account, clearSession]);
   useEffect(() => {
     let active = true;
     sessionRequest("/api/session").then((value) => {
@@ -57,11 +61,13 @@ export function HostedWeb() {
   }
   if (account && service) return (
     <App key={account} hosted={{
+      account,
       service,
       owner: !!session?.owner,
       signOut: async () => {
-        await sessionRequest("/api/logout", {});
         service.lock();
+        await forgetUnlock(account).catch(() => {});
+        await sessionRequest("/api/logout", {});
         clearSession();
       },
     }} />

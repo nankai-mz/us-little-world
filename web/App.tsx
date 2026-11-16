@@ -49,6 +49,15 @@ import {
 import { UsService } from "../src/core/service";
 import { prepareBrowserPhoto } from "./photos";
 import { QuestionRoom } from "./QuestionRoom";
+import {
+  deleteExpiredUnlock,
+  forgetUnlock,
+  rememberUnlock,
+  restoreUnlock,
+  unlockDuration,
+  unlockGeneration,
+  unlockGenerationKey,
+} from "./rememberedUnlock";
 import { dailyQuestion } from "../src/core/questions";
 import { type ConnectionStatus } from "../src/core/protocol";
 import {
@@ -67,7 +76,7 @@ import {
   today,
   togetherDays,
 } from "../src/core/date";
-import { canOpenCapsule, report, secureChoice } from "../src/core/domain";
+import { canOpenCapsule, report, secureChoice, SPACE_MEMBER_NAMES } from "../src/core/domain";
 import { fingerprint, publicKeys, recoveryOnlyVault } from "../src/core/crypto";
 import {
   createBrowserService,
@@ -83,6 +92,8 @@ const tabs = [
   { id: "plans", label: "未来清单", sub: "计划", icon: CalendarDays },
   { id: "profile", label: "我的空间", sub: "我的", icon: UserRound },
 ];
+const firstAvatar = { name: SPACE_MEMBER_NAMES[0], color: "a" };
+const secondAvatar = { name: SPACE_MEMBER_NAMES[1], color: "b" };
 const moodOptions = [
   "很开心",
   "被治愈",
@@ -226,7 +237,12 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-export function App({ hosted }: { hosted?: { service: UsService; owner: boolean; signOut: () => Promise<void> } }) {
+export function App({ hosted }: { hosted?: { account: string; service: UsService; owner: boolean; signOut: () => Promise<void> } }) {
+  const hostedService = hosted?.service;
+  const account = hosted?.account;
+  const [myAvatar, partnerAvatar] = hosted && !hosted.owner
+    ? [secondAvatar, firstAvatar]
+    : [firstAvatar, secondAvatar];
   const [service, setService] = useState<UsService | null>(hosted?.service ?? null);
   const [mode, setMode] = useState<"demo" | "personal">(hosted ? "personal" : "demo");
   const [revision, setRevision] = useState(0);
@@ -240,7 +256,10 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
   const [password, setPassword] = useState("");
   const [spaceName, setSpaceName] = useState("我们的小世界");
   const [startDate, setStartDate] = useState(today());
-  const [welcomeMode, setWelcomeMode] = useState(hosted?.service.vault ? "unlock" : "welcome");
+  const [welcomeMode, setWelcomeMode] = useState(
+    hostedService ? (hostedService.secrets ? "unlock" : hostedService.vault ? "resume" : "checking") : "welcome",
+  );
+  const [unlockExpiresAt, setUnlockExpiresAt] = useState(0);
   const [joinCode, setJoinCode] = useState("");
   const [verificationCode, setVerificationCode] = useState("");
   const [recovery, setRecovery] = useState("");
@@ -299,6 +318,80 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
     }
   }, [unlocked]);
   const notify = useCallback((message: string) => setToast(message), []);
+  const lockHostedSpace = useCallback(() => {
+    hostedService?.lock();
+    setPassword("");
+    setUnlockExpiresAt(0);
+    setWelcomeMode(hostedService?.vault ? "unlock" : "checking");
+    close();
+  }, [hostedService, close]);
+  useEffect(() => {
+    if (!account || !hostedService || welcomeMode !== "resume") return;
+    let canceled = false;
+    void (async () => {
+      const saved = await restoreUnlock(account).catch(() => null);
+      try {
+        if (!saved || canceled) return;
+        await hostedService.unlockWithKey(saved.access);
+        if (canceled || saved.expiresAt <= Date.now() || saved.generation !== unlockGeneration(account)) {
+          hostedService.lock();
+          return;
+        }
+        setUnlockExpiresAt(saved.expiresAt);
+      } catch {
+        hostedService.lock();
+      } finally {
+        saved?.access.key.fill(0);
+        if (!canceled) setWelcomeMode("unlock");
+      }
+    })();
+    return () => { canceled = true; };
+  }, [account, hostedService, welcomeMode]);
+  useEffect(() => {
+    if (!account) return;
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === unlockGenerationKey(account) || event.key === null) lockHostedSpace();
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [account, lockHostedSpace]);
+  useEffect(() => {
+    if (!account || !unlockExpiresAt) return;
+    const check = () => {
+      if (Date.now() >= unlockExpiresAt) {
+        lockHostedSpace();
+        void deleteExpiredUnlock(account).catch(() => {});
+      }
+    };
+    const timer = window.setTimeout(check, Math.max(0, unlockExpiresAt - Date.now()));
+    document.addEventListener("visibilitychange", check);
+    return () => {
+      window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", check);
+    };
+  }, [account, unlockExpiresAt, lockHostedSpace]);
+  async function openSpace<T>(action: () => Promise<T>): Promise<T> {
+    if (!hostedService || !account) return action();
+    const generation = unlockGeneration(account);
+    const value = await action();
+    const expiresAt = Date.now() + unlockDuration;
+    const access = hostedService.getUnlockKey();
+    if (access) {
+      try {
+        await rememberUnlock(account, access, generation, expiresAt);
+      } catch {
+        notify("浏览器暂时无法记住解锁状态，刷新后需重新输入口令");
+      } finally {
+        access.key.fill(0);
+      }
+    }
+    if (generation !== unlockGeneration(account)) {
+      lockHostedSpace();
+      throw new AppError("LOCKED", "此空间已锁定，请重新解锁");
+    }
+    setUnlockExpiresAt(expiresAt);
+    return value;
+  }
   const update = () => setRevision((v) => v + 1);
   const run = async <T,>(
     fn: () => Promise<T>,
@@ -343,6 +436,19 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
     };
   }, []);
   useEffect(() => {
+    if (!hostedService || welcomeMode !== "checking") return;
+    let canceled = false;
+    hostedService.bootstrap().then(() => {
+      if (!canceled) {
+        const space = hostedService.space;
+        setWelcomeMode(space?.status === "active" ? "device" : space ? "restore-only" : "welcome");
+      }
+    }).catch(() => {
+      if (!canceled) setWelcomeMode("check-error");
+    });
+    return () => { canceled = true; };
+  }, [hostedService, welcomeMode]);
+  useEffect(() => {
     if (hosted) return;
     let canceled = false;
     const selected = localStorage.getItem("us.mode") as
@@ -379,7 +485,7 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
     return () => clearInterval(id);
   }, [service, unlocked]);
   useEffect(() => {
-    if (!service || !sessionOpen) return;
+    if (hostedService || !service || !sessionOpen) return;
     let hiddenAt = 0;
     const change = () => {
       if (document.hidden) hiddenAt = Date.now();
@@ -393,7 +499,7 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
     };
     document.addEventListener("visibilitychange", change);
     return () => document.removeEventListener("visibilitychange", change);
-  }, [service, sessionOpen]);
+  }, [hostedService, service, sessionOpen]);
   async function enterDemo(confirmReset = false) {
     await run(async () => {
       const s = createBrowserService("demo");
@@ -424,15 +530,17 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
   async function createPersonal() {
     await run(async () => {
       const s = hosted?.service ?? createBrowserService("personal");
-      const key = welcomeMode === "join"
-        ? await s.join(password, joinCode)
-        : await s.create(password, spaceName, startDate);
+      const key = await openSpace(() => welcomeMode === "join"
+        ? s.join(password, joinCode)
+        : s.create(password, spaceName, startDate));
       setService(s);
       setMode("personal");
       if (!hosted) localStorage.setItem("us.mode", "personal");
       setJoinCode("");
-      setRecovery(key);
-      setModal("recovery");
+      if (!hosted || welcomeMode !== "join") {
+        setRecovery(key);
+        setModal("recovery");
+      }
       setPassword("");
     });
   }
@@ -527,7 +635,7 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
     effectTimer.current = setTimeout(() => setPetEffect(""), 1500);
   }
 
-  if (!service?.secrets || !service.space)
+  if (welcomeMode === "resume" || !service?.secrets || !service.space)
     return (
       <div className="welcome">
         <div className="welcome-art">
@@ -563,6 +671,8 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
           <h2>
             {welcomeMode === "unlock"
               ? "欢迎回到我们的小世界"
+              : welcomeMode === "device"
+                ? "已加入双人空间"
               : welcomeMode === "create"
                 ? "故事，从今天开始"
                 : "很高兴，在这里遇见你"}
@@ -571,7 +681,19 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
             {welcomeMode === "unlock"
               ? mode === "demo"
                 ? "示例使用临时随机口令，没有需要你记住的默认密码。"
-                : "输入本机解锁口令，打开你的加密手账。"
+                : hosted
+                  ? "输入本机解锁口令。这个浏览器会记住解锁状态 24 小时。"
+                  : "输入本机解锁口令，打开你的加密手账。"
+              : welcomeMode === "resume"
+                ? "正在恢复本机解锁状态…"
+              : welcomeMode === "device"
+                ? "在此浏览器设置本机解锁口令，登记设备后即可获取安全码。已有加密备份时，可用备份恢复原有密钥和私人记录。"
+              : welcomeMode === "checking"
+                ? "正在查询账号的空间状态…"
+              : welcomeMode === "check-error"
+                ? "暂时无法查询空间状态，请重试。"
+              : welcomeMode === "restore-only"
+                ? "你的空间处于关闭冷静期。请使用已有的加密备份恢复密钥。"
               : hosted
                 ? "请创建或加入你们的双人空间。"
                 : "微信版是我们的目的地，这里可以先体验。"}
@@ -591,6 +713,10 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
                 重新进入示例前会询问是否重建；如果要保留修改，可先使用已导出的备份恢复。
               </p>
             </div>
+          ) : ["checking", "resume"].includes(welcomeMode) ? null : welcomeMode === "check-error" ? (
+            <button className="primary full" onClick={() => setWelcomeMode("checking")}>重试</button>
+          ) : welcomeMode === "restore-only" ? (
+            <button className="primary full" onClick={() => setModal("restore")}>使用备份恢复</button>
           ) : welcomeMode === "welcome" && hosted ? (
             <>
               <button className="primary full" onClick={() => setWelcomeMode(hosted.owner ? "create" : "join")}>
@@ -629,10 +755,21 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
             <form
               onSubmit={(e) => {
                 e.preventDefault();
+                if (busy) return;
                 if (welcomeMode === "unlock")
                   run(async () => {
-                    await service!.unlock(password);
+                    await openSpace(() => service!.unlock(password));
                     setPassword("");
+                  });
+                else if (welcomeMode === "device")
+                  run(async () => {
+                    try {
+                      await openSpace(() => hostedService!.setUpDevice(password));
+                      setPassword("");
+                    } catch (error) {
+                      if (hostedService!.vault) setWelcomeMode("unlock");
+                      throw error;
+                    }
                   });
                 else createPersonal();
               }}
@@ -668,9 +805,7 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
                   type="password"
                   value={password}
                   autoComplete={
-                      ["create", "join"].includes(welcomeMode)
-                      ? "new-password"
-                      : "current-password"
+                    welcomeMode === "unlock" ? "current-password" : "new-password"
                   }
                   minLength={10}
                   onChange={(e) => setPassword(e.target.value)}
@@ -682,16 +817,18 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
                   ? "正在打开…"
                   : welcomeMode === "unlock"
                     ? "打开小世界"
-                    : welcomeMode === "join" ? "加入双人空间" : "创建我们的空间"}
+                    : welcomeMode === "device"
+                      ? "登记设备并获取安全码"
+                      : welcomeMode === "join" ? "加入双人空间" : "创建我们的空间"}
               </button>
-              <button
+              {(!hosted || ["create", "join"].includes(welcomeMode)) && <button
                 className="text-button full"
                 type="button"
-                onClick={() => setWelcomeMode("welcome")}
+                onClick={() => setWelcomeMode(hosted ? "checking" : "welcome")}
               >
                 返回
-              </button>
-              {welcomeMode === "unlock" && (
+              </button>}
+              {["unlock", "device"].includes(welcomeMode) && (
                 <button
                   className="text-button full"
                   type="button"
@@ -739,6 +876,7 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
             <RestoreForm
               service={service}
               hosted={!!hosted}
+              openSpace={openSpace}
               mode={mode}
               run={run}
               done={() => {
@@ -749,6 +887,53 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
           </Modal>
         )}
       </div>
+    );
+
+  if (hosted && !unlocked)
+    return (
+      <main className="key-setup">
+        <section className="welcome-form" aria-labelledby="key-setup-title">
+          <ShieldCheck className="flower" size={40} />
+          <h2 id="key-setup-title">已加入双人空间</h2>
+          <p>正在等待空间密钥。接收后，即可查看你们的共同记录。</p>
+          <Field label="我的设备安全码">
+            <input
+              readOnly
+              value={fingerprint(publicKeys(service.secrets))}
+              onFocus={(event) => event.currentTarget.select()}
+            />
+          </Field>
+          <p>
+            把上面的安全码发给对方。请对方在「我的空间 → 设备与安全」核对你的安全码，
+            向这台设备发送空间密钥，并把对方的设备安全码发给你。
+          </p>
+          <form onSubmit={(event) => {
+            event.preventDefault();
+            if (busy || !verificationCode.trim()) return;
+            run(async () => {
+              const firstKey = Object.keys(service.secrets!.spaceKeys).length === 0;
+              await service.receive(verificationCode.trim());
+              setVerificationCode("");
+              const recoveryKey = service.secrets?.recoveryKey;
+              if (firstKey && service.ready && recoveryKey) {
+                setRecovery(recoveryKey);
+                setModal("recovery");
+              }
+            }, "已接收空间密钥");
+          }}>
+            <Field label="对方的设备安全码">
+              <input value={verificationCode} onChange={(event) => setVerificationCode(event.target.value)} required />
+            </Field>
+            <button className="primary full" disabled={busy || !verificationCode.trim()}>
+              接收空间密钥
+            </button>
+          </form>
+          {toast && <p role="status" className="muted">{toast}</p>}
+          <button className="text-button full" disabled={busy} onClick={() => run(hosted.signOut)}>
+            退出网站账号
+          </button>
+        </section>
+      </main>
     );
 
   const filteredMemories = memories.filter(
@@ -847,15 +1032,15 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
         </button>
         <div className="side-space">
           <div className="avatar-pair">
-            <span className="avatar a">予</span>
-            <span className="avatar b">辰</span>
+            <span className={`avatar ${firstAvatar.color}`}>{firstAvatar.name}</span>
+            <span className={`avatar ${secondAvatar.color}`}>{secondAvatar.name}</span>
             <i>
               <Heart size={10} fill="currentColor" />
             </i>
           </div>
           <strong>
             {mode === "demo"
-              ? "小予 & 阿辰"
+              ? SPACE_MEMBER_NAMES.join(" & ")
               : relationship?.data.body || "我 & 你"}
           </strong>
           <span className="tiny">
@@ -902,6 +1087,7 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
             onClick={() => {
               go("profile");
               setModal("security");
+              run(async () => setDevices(await service.devices()));
             }}
           >
             <ShieldCheck size={16} />
@@ -937,8 +1123,8 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
             >
               <RefreshCw size={17} className={busy ? "spin" : ""} />
             </button>
-            <button className="avatar small a" onClick={() => go("profile")}>
-              予
+            <button className={`avatar small ${myAvatar.color}`} onClick={() => go("profile")}>
+              {myAvatar.name}
             </button>
           </div>
         </header>
@@ -1067,9 +1253,9 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
                     <Heart size={12} /> TWO OF US
                   </span>
                   <div className="hero-avatars">
-                    <span className="avatar a large">予</span>
+                    <span className={`avatar ${firstAvatar.color} large`}>{firstAvatar.name}</span>
                     <span className="heart-thread">♡</span>
-                    <span className="avatar b large">辰</span>
+                    <span className={`avatar ${secondAvatar.color} large`}>{secondAvatar.name}</span>
                   </div>
                   <p className="together-caption">不知不觉，我们已经一起走过</p>
                   <div className="together-number">
@@ -1109,7 +1295,7 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
                     <span className="tiny">轻轻告诉对方</span>
                   </div>
                   <div className="mood-row">
-                    <span className="avatar a">予</span>
+                    <span className={`avatar ${myAvatar.color}`}>{myAvatar.name}</span>
                     <div>
                       <strong>
                         我今天<span className="tiny"> · 主动分享</span>
@@ -1125,10 +1311,10 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
                     <span className="mood-sun">☀</span>
                   </div>
                   <div className="mood-row">
-                    <span className="avatar b">辰</span>
+                    <span className={`avatar ${partnerAvatar.color}`}>{partnerAvatar.name}</span>
                     <div>
                       <strong>
-                        {mode === "demo" ? "阿辰" : "对方"}
+                        {mode === "demo" ? partnerAvatar.name : "对方"}
                         <span className="tiny"> · 只展示分享的心情</span>
                       </strong>
                       <span className="mood-bubble lavender">
@@ -2404,8 +2590,8 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
                     }}
                   />
                 </label>
-                <span className="avatar a xlarge">予</span>
-                <h2>{mode === "demo" ? "小予" : "我的小角落"}</h2>
+                <span className={`avatar ${myAvatar.color} xlarge`}>{myAvatar.name}</span>
+                <h2>{mode === "demo" ? myAvatar.name : "我的小角落"}</h2>
                 <p className="muted">愿每个平凡的日子，都有小小的喜欢。</p>
                 <span className="private-badge">
                   <LockKeyhole size={13} />{" "}
@@ -2429,7 +2615,13 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
                 </div>
                 <button
                   className="secondary full"
+                  disabled={busy}
                   onClick={() => {
+                    if (account) {
+                      void forgetUnlock(account).catch(() => {});
+                      lockHostedSpace();
+                      return;
+                    }
                     service.lock();
                     sessionStorage.removeItem("us.demo.password");
                     setWelcomeMode("unlock");
@@ -2923,13 +3115,14 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
                 <ShieldCheck size={18} />
                 <span>
                   <strong>
-                    {d.label}
-                    {d.id === service.secrets!.deviceId ? " · 当前设备" : ""}
+                    {d.id === service.secrets!.deviceId
+                      ? `${d.label} · 当前设备`
+                      : hosted && d.userId !== service.userId ? "对方的设备" : d.label}
                   </strong>
                   <small>{d.id.slice(0, 16)}…</small>
                 </span>
                 {hosted && service.ready && d.id !== service.secrets!.deviceId && (
-                  <button className="text-button" disabled={busy || !verificationCode.trim()} onClick={() =>
+                  <button className="text-button" disabled={busy || fingerprint(d) !== verificationCode.trim().toUpperCase().replace(/\s+/g, " ")} onClick={() =>
                     run(() => service.transfer(d, verificationCode.trim()), "空间密钥已发送")
                   }>发送空间密钥</button>
                 )}
@@ -3038,6 +3231,7 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
           <RestoreForm
             service={service}
             hosted={!!hosted}
+            openSpace={openSpace}
             mode={mode}
             run={run}
             done={() => {
@@ -3141,6 +3335,7 @@ export function App({ hosted }: { hosted?: { service: UsService; owner: boolean;
           <button
             className="danger-button full"
             onClick={() => {
+              if (account) void forgetUnlock(account).catch(() => {});
               service.lock();
               close();
               setWelcomeMode(hosted && !hosted.owner ? "join" : "create");
@@ -3605,12 +3800,14 @@ function Editor({
 function RestoreForm({
   service,
   hosted,
+  openSpace,
   mode,
   run,
   done,
 }: {
   service: UsService | null;
   hosted?: boolean;
+  openSpace: (action: () => Promise<void>) => Promise<void>;
   mode: "demo" | "personal";
   run: <T>(fn: () => Promise<T>, success?: string) => Promise<T | undefined>;
   done: () => void;
@@ -3626,7 +3823,7 @@ function RestoreForm({
           if (hosted) {
             if (!service || backup?.format !== "UsBackup" || backup.version !== 2 || !backup.vault)
               throw new Error("请选择此网站导出的加密密钥备份");
-            await service.recover(backup.vault, key, password);
+            await openSpace(() => service.recover(backup.vault, key, password));
             done();
           } else {
             const values = await stageBackup(backup, key, password);
