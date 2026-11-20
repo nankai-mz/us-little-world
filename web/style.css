@@ -62,6 +62,82 @@
   --green: #637258;
   --shadow: 0 5px 22px #68573d05;
 }
+.offline-library {
+  width: min(100% - 2rem, 46rem);
+  margin: auto;
+  padding: max(1rem, env(safe-area-inset-top)) 0 max(1rem, env(safe-area-inset-bottom));
+}
+.offline-header, .offline-entry {
+  padding: 1rem;
+  margin-block: 1rem;
+  overflow-wrap: anywhere;
+}
+.offline-header form { margin-top: 1rem; }
+.offline-photos img { display: block; width: auto; max-width: 100%; max-height: 32rem; margin-block: 0.5rem; }
+.pwa-controls { margin-block: 0.75rem; }
+.pwa-controls > p, .pwa-controls details { font-size: 0.875rem; }
+.meal-decision, .wardrobe-panel { max-width: 46rem; padding: clamp(1rem, 3vw, 1.75rem); }
+.meal-decision form, .meal-decision section, .meal-decision details,
+.wardrobe-panel form, .wardrobe-panel section { margin-block: 1rem; }
+.meal-decision li, .wardrobe-panel li { margin-block: 0.5rem; }
+.wardrobe-panel img { display: block; max-width: min(12rem, 100%); max-height: 12rem; margin-block: 0.5rem; }
+.galaxy {
+  padding: clamp(1rem, 3vw, 1.75rem);
+  border-radius: 18px;
+  background: #080e25;
+  color: #f1edff;
+}
+.galaxy-header, .galaxy-photo { display: grid; gap: 0.75rem; margin-block: 0.75rem; }
+.galaxy-buttons { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-block: 0.5rem; }
+.memory-pages { scroll-margin-top: 5rem; }
+.memory-pagination { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0.75rem; margin-block: 1rem; }
+.galaxy-viewport { height: clamp(16rem, 48vh, 32rem); overflow: auto; border-radius: 12px; background: #141b3a; }
+.galaxy-pannable { cursor: grab; }
+.galaxy-pannable:active { cursor: grabbing; }
+.galaxy-map {
+  position: relative;
+  background: radial-gradient(ellipse at 40% 45%, #30264f 0, transparent 62%), #141b3a;
+}
+.galaxy-star {
+  position: absolute;
+  width: 32px;
+  height: 32px;
+  border: 0;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  background: transparent;
+  color: #d8cbff;
+  cursor: pointer;
+}
+.galaxy-star::before {
+  position: absolute;
+  inset: 11px;
+  content: "";
+  border-radius: inherit;
+  background: currentColor;
+  box-shadow: 0 0 12px currentColor;
+}
+.galaxy-color-1 { color: #ace4ff; }
+.galaxy-color-2 { color: #ffd9ab; }
+.galaxy-color-3 { color: #e5acff; }
+.galaxy-star:focus-visible, .galaxy-star[aria-pressed="true"] { outline: 2px solid #fff; z-index: 1; }
+.galaxy-list { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.5rem; padding-inline-start: 1.5rem; }
+.galaxy-list button { max-width: 100%; text-align: start; white-space: normal; overflow-wrap: anywhere; }
+.galaxy-photo { padding: 1rem; background: #141b3a; border-radius: 12px; overflow-wrap: anywhere; }
+.galaxy-photo img { display: block; max-width: 100%; max-height: min(60vh, 36rem); width: auto; }
+.memory-book { display: grid; gap: 1rem; }
+.book-editor { display: grid; gap: 0.7rem; min-width: 0; }
+.book-editor label:not(.book-choice) { display: grid; gap: 0.35rem; }
+.book-editor ol { padding-inline-start: 1.5rem; }
+.book-editor li + li { margin-top: 0.75rem; }
+.book-choice { display: block; overflow-wrap: anywhere; }
+.book-controls p { flex-basis: 100%; }
+.book-cover, .book-page { padding: clamp(1rem, 5vw, 3rem); background: #fff; color: #262139; overflow-wrap: anywhere; }
+.book-cover { margin-block-end: 1rem; text-align: center; background: #eee8fc; }
+.book-page { margin-block-end: 1rem; }
+.book-body, .book-cover p { white-space: pre-wrap; }
+.book-page figure { margin: 1rem 0; }
+.book-page img { display: block; max-width: 100%; max-height: 65vh; width: auto; height: auto; margin: auto; }
 * {
   box-sizing: border-box;
 }
@@ -279,6 +355,7 @@ small {
   padding: 35px 23px 20px;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
   z-index: 10;
 }
 .brand {
@@ -405,8 +482,23 @@ small {
   font-size: 31px;
 }
 .side-space strong {
+  overflow-wrap: anywhere;
   font-size: 12px;
   letter-spacing: 1px;
+}
+.companionship {
+  padding: 1rem;
+  margin-block: 1rem;
+}
+.companionship h2 {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+}
+.companionship .inline-form {
+  flex-wrap: wrap;
+  align-items: center;
 }
 .side-space .tiny {
   font-size: 12px;
@@ -2128,6 +2220,17 @@ small {
   margin-top: 7px;
   font-size: 12px;
 }
+.unlock-memory-option {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 44px;
+  margin-block: 0.35rem;
+}
+.unlock-memory-option input {
+  width: 1rem;
+  height: 1rem;
+}
 .profile-note {
   grid-column: 1/-1;
   text-align: center;
@@ -3750,6 +3853,15 @@ summary {
   }
 }
 @media print {
+  body:has(.book-print) .content > :not(.memory-book),
+  .book-controls { display: none !important; }
+  .memory-book { display: block; }
+  .book-cover { min-height: 120mm; display: grid; align-content: center; margin: 0; }
+  .book-cover, .book-page { padding: 8mm; }
+  .book-page { break-before: page; margin: 0; }
+  .book-page h3 { break-after: avoid; }
+  .book-page figure { break-inside: avoid; }
+  .book-page img { max-height: 170mm; }
   body {
     padding: 0 !important;
     background: #fff;

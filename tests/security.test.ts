@@ -542,6 +542,23 @@ describe("云端权限、并发与客户端集成", () => {
     ).rejects.toMatchObject({ code: "IDENTITY_MISMATCH" });
     expect(JSON.stringify(b.vault)).toBe(previous);
   });
+  it("恢复时设备登记失败会保留正在使用的密钥库和已读取记录", async () => {
+    const { a } = await setup();
+    const entry = await a.save({ kind: "memory", title: "现有私人记录", date: "2026-10-30" }, "private");
+    const originalVault = a.vault!;
+    const originalSecrets = a.secrets!;
+    const delegate = a.transport;
+    a.transport = {
+      call: (action, data) => action === "registerDevice"
+        ? Promise.reject(new AppError("NETWORK_ERROR", "测试网络故障"))
+        : delegate.call(action, data),
+    };
+    await expect(a.recover(originalVault, originalSecrets.recoveryKey!, "strong new recovery phrase"))
+      .rejects.toMatchObject({ code: "NETWORK_ERROR" });
+    expect(a.vault).toEqual(originalVault);
+    expect(a.secrets).toBe(originalSecrets);
+    expect(a.active).toContainEqual(entry);
+  });
   it("恢复同一账号时注册新设备、重包装密钥且可读取原记录", async () => {
     const { a, make } = await setup();
     await a.save({ kind: "memory", title: "恢复后还在", date: "2026-10-30" });

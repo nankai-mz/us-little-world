@@ -14,6 +14,17 @@ interface SavedUnlock {
 export const unlockGenerationKey = (account: string) => `us.web.${account}.unlockGeneration`;
 export const unlockGeneration = (account: string) =>
   localStorage.getItem(unlockGenerationKey(account)) ?? "";
+const preferenceKey = (account: string) => `us.web.${account}.skipUnlockMemory`;
+
+export function allowsUnlockMemory(account: string) {
+  try { return localStorage.getItem(preferenceKey(account)) !== "true"; }
+  catch { return false; }
+}
+
+export async function setUnlockMemory(account: string, remember: boolean) {
+  localStorage.setItem(preferenceKey(account), String(!remember));
+  if (!remember) await forgetUnlock(account);
+}
 
 function unlockContext(account: string, { salt, expiresAt, generation }: SavedUnlock) {
   return new TextEncoder().encode(JSON.stringify([account, salt, expiresAt, generation]));
@@ -63,7 +74,7 @@ export async function rememberUnlock(
       wrappingKey,
       key,
     );
-    if (generation === unlockGeneration(account))
+    if (allowsUnlockMemory(account) && generation === unlockGeneration(account))
       await unlockStore("readwrite", (store) => store.put(saved, account));
   } finally {
     key.fill(0);
@@ -82,6 +93,7 @@ export async function deleteExpiredUnlock(account: string, now = Date.now()) {
 }
 
 export async function restoreUnlock(account: string) {
+  if (!allowsUnlockMemory(account)) return null;
   const saved: SavedUnlock | undefined = await unlockStore("readonly", (store) => store.get(account));
   if (!saved || saved.generation !== unlockGeneration(account)) return null;
   if (saved.expiresAt <= Date.now()) {
@@ -97,6 +109,9 @@ export async function restoreUnlock(account: string) {
 }
 
 export async function forgetUnlock(account: string) {
-  localStorage.setItem(unlockGenerationKey(account), crypto.randomUUID());
-  await unlockStore("readwrite", (store) => store.delete(account));
+  try {
+    localStorage.setItem(unlockGenerationKey(account), crypto.randomUUID());
+  } finally {
+    await unlockStore("readwrite", (store) => store.delete(account));
+  }
 }

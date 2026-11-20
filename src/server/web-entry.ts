@@ -1,11 +1,13 @@
 import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from "node:crypto";
-import { readFile, mkdir } from "node:fs/promises";
+import { readFile, mkdir, readdir, statfs } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { dirname, extname, resolve } from "node:path";
 import { promisify } from "node:util";
 import { createApi } from "./api";
 import { runMaintenance } from "./lifecycle";
 import { openWebRepository } from "./web-repository";
+import { parseWebRoute } from "../../web/routes";
+import { AppError } from "../core/types";
 
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 const derive = promisify(scrypt);
@@ -31,29 +33,69 @@ const unknownAccountHash = randomBytes(32);
 const port = Number(process.env.US_WEB_PORT ?? 5180);
 if (!Number.isSafeInteger(port) || port < 1 || port > 65535) throw new Error("Invalid US_WEB_PORT.");
 const origin = new URL(process.env.US_WEB_ORIGIN || `http://127.0.0.1:${port}`);
+if (origin.username || origin.password || origin.pathname !== "/" || origin.search || origin.hash)
+  throw new Error("US_WEB_ORIGIN must be an origin without credentials, path, query or fragment.");
 if (origin.protocol !== "https:" && !(origin.protocol === "http:" && origin.hostname === "127.0.0.1" && Number(origin.port) === port))
   throw new Error("Use HTTPS for the website origin outside localhost.");
 const database = resolve(process.env.US_WEB_DB || "artifacts/private-web/us.sqlite");
-await mkdir(dirname(database), { recursive: true, mode: 0o700 });
+const dataDirectory = dirname(database);
+await mkdir(dataDirectory, { recursive: true, mode: 0o700 });
 const files = openWebRepository(database);
-const deps = { ...files, runtime: { mode: "cloud" } as const, now: Date.now, hash, id: () => randomBytes(16).toString("hex") };
+async function checkPhotoCapacity() {
+  const { bavail, blocks } = await statfs(dataDirectory, { bigint: true }).catch(() => {
+    throw new AppError("PHOTO_STORAGE_LOW", "暂时无法核对服务器存储空间，请稍后重试上传照片");
+  });
+  if (blocks <= 0n || bavail * 10n < blocks)
+    throw new AppError("PHOTO_STORAGE_LOW", "服务器剩余存储空间不足。可以先保存文字，空间恢复后再添加照片");
+}
+const deps = { ...files, runtime: { mode: "cloud" } as const, recordReceipts: true, managedPhotos: true, webDeviceChallenges: true,
+  now: Date.now, hash, id: () => randomBytes(16).toString("hex"), checkPhotoCapacity };
 const api = createApi(deps);
 const maintenance = setInterval(() => {
   void runMaintenance(deps).catch(() => console.error("Web space maintenance failed."));
 }, 3600000);
 maintenance.unref();
-const html = (await readFile("dist/index.html", "utf8")).replace("<head>", '<head><meta name="us-web-hosted" content="1">');
-const sessions = new Map<string, { account: string; expiresAt: number }>();
+const html = (await readFile("dist/index.html", "utf8")).replace("<head>",
+  '<head><meta name="us-web-hosted" content="1"><link rel="manifest" href="/manifest.webmanifest"><link rel="apple-touch-icon" href="/assets/icon-192.png">');
+type DeviceBinding = { spaceId: string; deviceId: string };
+type WebSession = {
+  account: string;
+  expiresAt: number;
+  challenges: Map<string, DeviceBinding & { expiresAt: number }>;
+  binding?: DeviceBinding;
+  authorization?: DeviceBinding & { action: string; expiresAt: number };
+};
+const sessions = new Map<string, WebSession>();
+const unboundActions = new Set(["health", "bootstrap", "createSpace", "joinSpace"]);
+const sensitiveActions = new Set(["putTransfer", "revokeDevice", "rotateSpaceKey", "closeSpace", "cancelClose"]);
+const deviceIdentifier = /^[a-zA-Z0-9_-]{1,80}$/;
 const cookieName = origin.protocol === "https:" ? "__Host-us_session" : "us_session";
 const cookieAttributes = `Path=/; HttpOnly; SameSite=Strict${origin.protocol === "https:" ? "; Secure" : ""}`;
 const attemptWindow = 60000;
 let attempts = 0;
 let windowEnds = Date.now() + attemptWindow;
+let passwordChecks = 0;
+const reauthAttempts = new Map<string, { count: number; expiresAt: number }>();
 const mime: Record<string, string> = {
   ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml",
   ".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp",
   ".ico": "image/x-icon", ".woff2": "font/woff2",
 };
+const offlineShell = html.replace("<head>", '<head><meta name="us-web-offline" content="1">');
+const workerSource = await readFile("dist/sw.js", "utf8").catch(() => null);
+const manifest = await readFile("dist/manifest.webmanifest").catch(() => null);
+let serviceWorker: string | null = null;
+if (workerSource && manifest) {
+  const entries = await readdir("dist/assets", { withFileTypes: true });
+  const assets = entries.filter((entry) => entry.isFile() && /^[a-zA-Z0-9._-]+$/.test(entry.name) && mime[extname(entry.name)])
+    .map(({ name }) => `/assets/${name}`).sort();
+  const digest = createHash("sha256").update(offlineShell).update(workerSource).update(manifest);
+  for (const file of assets) digest.update(file).update(await readFile(resolve("dist", "." + file)));
+  serviceWorker = `self.US_PUBLIC_BUILD = ${JSON.stringify({
+    cacheName: "us-public-shell-" + digest.digest("hex").slice(0, 24),
+    assets: ["/manifest.webmanifest", ...assets],
+  })};\n${workerSource}`;
+}
 
 function json(response: ServerResponse, status: number, value: unknown) {
   response.writeHead(status, { "Content-Type": "application/json; charset=utf-8" });
@@ -79,14 +121,45 @@ async function readJson(request: IncomingMessage, limit: number) {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new Error("INVALID_JSON");
   return input as Record<string, unknown>;
 }
+async function passwordMatches(account: string, password: string) {
+  const expected = credentials.get(account);
+  passwordChecks++;
+  try {
+    const actual = await derive(password, salt, 32) as Buffer;
+    return timingSafeEqual(actual, expected ?? unknownAccountHash) && !!expected;
+  } finally {
+    passwordChecks--;
+  }
+}
 const server = createServer({ requestTimeout: 30000, headersTimeout: 10000 }, async (request, response) => {
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader("Referrer-Policy", "no-referrer");
   response.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  if (origin.protocol === "https:") response.setHeader("Strict-Transport-Security", "max-age=15552000");
   const path = (request.url || "").split("?")[0];
   try {
-    if ((request.method === "GET" || request.method === "HEAD") && path === "/") {
+    if (request.method === "GET" && serviceWorker && path === "/sw.js") {
+      response.writeHead(200, { "Content-Type": "text/javascript; charset=utf-8" });
+      response.end(serviceWorker);
+      return;
+    }
+    if (request.method === "GET" && manifest && path === "/manifest.webmanifest") {
+      response.writeHead(200, { "Content-Type": "application/manifest+json; charset=utf-8" });
+      response.end(manifest);
+      return;
+    }
+    if (request.method === "GET" && serviceWorker && path === "/offline-shell.html" && request.headers["sec-fetch-mode"] !== "navigate") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(offlineShell);
+      return;
+    }
+    if (request.method === "GET" && path === "/healthz") {
+      await files.checkReady();
+      json(response, 200, { status: "ok" });
+      return;
+    }
+    if ((request.method === "GET" || request.method === "HEAD") && parseWebRoute(path)) {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       response.end(request.method === "HEAD" ? undefined : html);
       return;
@@ -127,9 +200,11 @@ const server = createServer({ requestTimeout: 30000, headersTimeout: 10000 }, as
         fail(response, 401, "INVALID_LOGIN", "账号或网站密码不正确");
         return;
       }
-      const expected = credentials.get(name);
-      const actual = await derive(password, salt, 32) as Buffer;
-      if (!timingSafeEqual(actual, expected ?? unknownAccountHash) || !expected) {
+      if (passwordChecks >= 2) {
+        fail(response, 429, "RATE_LIMITED", "当前验证请求较多，请稍后再试");
+        return;
+      }
+      if (!await passwordMatches(name, password)) {
         fail(response, 401, "INVALID_LOGIN", "账号或网站密码不正确");
         return;
       }
@@ -137,7 +212,7 @@ const server = createServer({ requestTimeout: 30000, headersTimeout: 10000 }, as
       for (const [key, value] of sessions) if (value.expiresAt <= now) sessions.delete(key);
       if (sessions.size >= 32) sessions.delete(sessions.keys().next().value!);
       const newToken = randomBytes(32).toString("hex");
-      sessions.set(hash(newToken), { account: name, expiresAt: now + sessionAge * 1000 });
+      sessions.set(hash(newToken), { account: name, expiresAt: now + sessionAge * 1000, challenges: new Map() });
       response.setHeader("Set-Cookie", `${cookieName}=${newToken}; Max-Age=${sessionAge}; ${cookieAttributes}`);
       json(response, 200, { account: name, owner: name === owner });
       return;
@@ -148,20 +223,112 @@ const server = createServer({ requestTimeout: 30000, headersTimeout: 10000 }, as
       json(response, 200, { account: null, owner: false });
       return;
     }
-    if (!account || request.headers["x-us-account"] !== account) {
+    if (!session || !account || request.headers["x-us-account"] !== account) {
       fail(response, 401, "AUTH_REQUIRED", "请先登录网站");
       return;
     }
-    const { action, data } = await readJson(request, 2 * 1024 * 1024);
-    if (typeof action !== "string") {
+    const { action, data = {} } = await readJson(request, 2 * 1024 * 1024);
+    if (typeof action !== "string" || !data || typeof data !== "object" || Array.isArray(data)) {
       fail(response, 400, "INVALID_REQUEST", "操作格式不正确");
       return;
     }
+    if (sessions.get(token) !== session || session.expiresAt <= Date.now()) {
+      fail(response, 401, "AUTH_REQUIRED", "请先登录网站");
+      return;
+    }
+    const input = data as Record<string, unknown>;
     if ((action === "createSpace" && account !== owner) || (action === "joinSpace" && account === owner)) {
       fail(response, 403, "FORBIDDEN", "请由第一个账号创建空间，另一个账号凭邀请码加入");
       return;
     }
-    json(response, 200, await api(hash(`Us/web/account/${account}`), action, data));
+    if (action === "deviceChallenge") {
+      const { spaceId, id } = input;
+      if (typeof spaceId !== "string" || typeof id !== "string" ||
+        !deviceIdentifier.test(spaceId) || !deviceIdentifier.test(id)) {
+        fail(response, 400, "INVALID_REQUEST", "设备标识格式不正确");
+        return;
+      }
+      const now = Date.now();
+      for (const [key, challenge] of session.challenges)
+        if (challenge.expiresAt <= now) session.challenges.delete(key);
+      if (session.challenges.size >= 8) session.challenges.delete(session.challenges.keys().next().value!);
+      const nonce = randomBytes(32).toString("hex");
+      session.challenges.set(nonce, { spaceId, deviceId: id, expiresAt: now + 60000 });
+      json(response, 200, { success: true, data: { nonce } });
+      return;
+    }
+    const userId = hash(`Us/web/account/${account}`);
+    if (action === "registerDevice") {
+      const nonce = (input.proof as { nonce?: unknown } | undefined)?.nonce;
+      const challenge = typeof nonce === "string" ? session.challenges.get(nonce) : undefined;
+      if (challenge) session.challenges.delete(nonce as string);
+      if (!challenge || challenge.expiresAt <= Date.now() ||
+        challenge.spaceId !== input.spaceId || challenge.deviceId !== input.id) {
+        fail(response, 403, "DEVICE_CHALLENGE_REQUIRED", "设备验证已失效，请重新解锁");
+        return;
+      }
+      const result = await api(userId, action, input);
+      if (result.success) {
+        if (session.binding?.spaceId !== challenge.spaceId || session.binding.deviceId !== challenge.deviceId)
+          delete session.authorization;
+        session.binding = { spaceId: challenge.spaceId, deviceId: challenge.deviceId };
+      }
+      json(response, 200, result);
+      return;
+    }
+    const binding = session.binding;
+    if (!unboundActions.has(action) &&
+      (!binding || binding.spaceId !== input.spaceId || binding.deviceId !== input.deviceId)) {
+      fail(response, 403, "DEVICE_UNBOUND", "此会话尚未验证当前设备，请重新解锁");
+      return;
+    }
+    if (action === "authorizeSensitiveAction") {
+      const { password, forAction } = input;
+      if (!binding || typeof forAction !== "string" || !sensitiveActions.has(forAction) ||
+        typeof password !== "string" || Buffer.byteLength(password) > 256) {
+        fail(response, 400, "INVALID_REQUEST", "确认请求格式不正确");
+        return;
+      }
+      const now = Date.now();
+      const previous = reauthAttempts.get(account);
+      const window = previous && previous.expiresAt > now ? previous : { count: 0, expiresAt: now + attemptWindow };
+      reauthAttempts.set(account, window);
+      if (passwordChecks >= 2 || window.count >= 8) {
+        fail(response, 429, "RATE_LIMITED", "验证请求过多，请稍后再试");
+        return;
+      }
+      window.count++;
+      if (!await passwordMatches(account, password)) {
+        fail(response, 403, "INVALID_PASSWORD", "网站密码不正确");
+        return;
+      }
+      if (sessions.get(token) !== session || session.expiresAt <= Date.now()) {
+        fail(response, 401, "AUTH_REQUIRED", "请先登录网站");
+        return;
+      }
+      if (session.binding?.spaceId !== binding.spaceId || session.binding.deviceId !== binding.deviceId) {
+        fail(response, 403, "DEVICE_UNBOUND", "当前验证设备已改变，请重新解锁");
+        return;
+      }
+      const device = await api(userId, "getSpace", input);
+      if (!device.success) {
+        json(response, 200, device);
+        return;
+      }
+      session.authorization = { ...binding, action: forAction, expiresAt: Date.now() + 120000 };
+      json(response, 200, { success: true, data: null });
+      return;
+    }
+    if (sensitiveActions.has(action)) {
+      const authorization = session.authorization;
+      if (!authorization || authorization.action !== action || authorization.expiresAt <= Date.now() ||
+        authorization.spaceId !== input.spaceId || authorization.deviceId !== input.deviceId) {
+        fail(response, 403, "REAUTH_REQUIRED", "请重新验证网站密码后继续");
+        return;
+      }
+      delete session.authorization;
+    }
+    json(response, 200, await api(userId, action, input));
   } catch (error) {
     if (error instanceof SyntaxError || (error instanceof Error && ["BODY_LIMIT", "INVALID_JSON"].includes(error.message))) {
       if (!response.destroyed) fail(response, 400, "INVALID_REQUEST", "请求格式或大小不正确");

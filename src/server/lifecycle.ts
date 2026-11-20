@@ -1,8 +1,14 @@
 import { AppError, type Space } from "../core/types";
 import type { ServerDeps, Tx } from "./api";
+import { webRecoveryKeys } from "../core/web-device";
+import { webProfiles } from "../core/web-profile";
+import { recordStreams, recordChanges } from "./web-sync";
 
 export const CLOSING_GRACE_MS = 7 * 86400000;
 export const TRANSFER_TTL_MS = 7 * 86400000;
+export const RECORD_RECEIPTS = "record_receipts";
+export const RECORD_TOMBSTONES = "record_tombstones";
+export const PHOTO_DRAFT_TTL_MS = 7 * 86400000;
 export function readableSpace(space: Space | null, at: number) {
   return (
     !!space &&
@@ -80,6 +86,7 @@ export async function runMaintenance(
           ...user,
           ...(user.spaceId === space.id ? { spaceId: null } : {}),
           ...(user.closingSpaceId === space.id ? { closingSpaceId: null } : {}),
+          ...(user.webInitialDevicePending === space.id ? { webInitialDevicePending: null } : {}),
         });
       }
       return value as Space;
@@ -92,6 +99,9 @@ export async function runMaintenance(
       "devices",
       "invitations",
       "ai_limits",
+      ...(deps.recordReceipts ? [RECORD_RECEIPTS, RECORD_TOMBSTONES] : []),
+      ...(deps.webDeviceChallenges ? [webRecoveryKeys, webProfiles] : []),
+      ...(deps.webSync ? [recordStreams, recordChanges] : []),
     ]) {
       while (remaining > 0) {
         const rows = await repo.list(
@@ -160,7 +170,7 @@ export async function runMaintenance(
     await scan("spaces", async (space) =>
       (await purgeSpace(space)) ? false : "retry",
     );
-    for (const collection of ["key_envelopes", "invitations", "ai_limits"]) {
+    for (const collection of ["key_envelopes", "invitations", "ai_limits", ...(deps.recordReceipts ? [RECORD_RECEIPTS] : [])]) {
       await scan(collection, async (row) => {
         if (!row.expiresAt && collection === "key_envelopes") {
           await repo.put(collection, row.id, {
@@ -188,10 +198,16 @@ export async function runMaintenance(
     }
     // A stage may contain almost 1 MB of ciphertext, so use a small page.
     await scan("encrypted_files", async (row) => {
-      if (!row.staging || row.expiresAt > now()) return false;
+      const expiredDraft = (file: any) => deps.managedPhotos && file?.managed && !file.recordId &&
+        Number.isFinite(file.attachUntil) && file.attachUntil <= now();
+      const expiredStage = (file: any) => file?.staging && file.expiresAt <= now();
+      if (!expiredStage(row) && !expiredDraft(row)) return false;
       const expired = await repo.transaction(async (tx) => {
         const current = await tx.get("encrypted_files", row.id);
-        if (!current?.staging || current.expiresAt > now()) return false;
+        if (expiredDraft(current)) {
+          if (!tx.deletePhoto) throw new AppError("NOT_CONFIGURED", "暂存照片清理需要事务照片存储");
+          await tx.deletePhoto(current.storageId);
+        } else if (!expiredStage(current)) return false;
         await tx.remove("encrypted_files", row.id);
         return true;
       });

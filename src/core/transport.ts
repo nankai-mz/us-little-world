@@ -4,10 +4,12 @@ const READ_ACTIONS = new Set([
   "bootstrap",
   "getSpace",
   "listRecords",
+  "syncRecords",
   "listDevices",
   "getTransfers",
   "fileGet",
   "fileUploadStatus",
+  "mutationStatus",
 ]);
 const ACTION_TIMEOUT_MS = new Map([
   ["aiGenerate", 35000],

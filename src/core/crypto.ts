@@ -27,7 +27,7 @@ export const browserRandom: RandomSource = async (n) =>
   crypto.getRandomValues(new Uint8Array(n));
 export const randomId = async (rng: RandomSource) => toHex(await rng(16));
 export function context(
-  meta: Pick<RecordMeta, "id" | "spaceId" | "creatorId" | "visibility">,
+  meta: Pick<RecordMeta, "id" | "spaceId" | "creatorId" | "visibility" | "ownerOnly">,
   keyVersion: number,
 ) {
   return JSON.stringify([
@@ -39,6 +39,7 @@ export function context(
     meta.creatorId,
     meta.visibility,
     keyVersion,
+    ...(meta.ownerOnly ? ["owner-only"] : []),
   ]);
 }
 function keyFor(master: Uint8Array, aad: string) {
@@ -122,6 +123,12 @@ export function decryptRecord<T>(record: CipherRecord, secrets: Secrets): T {
     unb64(key),
     context(record, record.envelope.keyVersion),
   );
+}
+export function decryptPhoto(envelope: Envelope, secrets: Secrets, photoId: string, visibility: RecordMeta["visibility"]) {
+  const key = visibility === "private" ? secrets.personalKey : secrets.spaceKeys[envelope.keyVersion];
+  if (!key || (visibility === "private" && secrets.sharedOnly))
+    throw new AppError("KEY_NOT_FOUND", "缺少此版本的照片密钥");
+  return open<{ base64: string }>(envelope, unb64(key), `Us/file/1/${secrets.spaceId}/${photoId}/${visibility}`).base64;
 }
 export async function newSecrets(
   rng: RandomSource,

@@ -8,6 +8,7 @@ import {
   type KeyTransfer,
   type Payload,
   type RandomSource,
+  type RecordMeta,
   type Secrets,
   type Space,
   type StorageAdapter,
@@ -20,9 +21,9 @@ import {
   acceptTransfer,
   b64,
   createTransfer,
+  decryptPhoto,
   decryptRecord,
   deriveVaultKey,
-  encryptRecord,
   fingerprint,
   hashText,
   newSecrets,
@@ -40,22 +41,40 @@ import {
 } from "./crypto";
 import { addDays, dayNumber, today } from "./date";
 import { canOpenCapsule, newPet, petAction, QUESTIONS, SPACE_MEMBER_NAMES } from "./domain";
-import { API_PROTOCOL, type ConnectionStatus } from "./protocol";
-import { base64ByteLength, MAX_PHOTO_BYTES, PHOTO_DOWNLOAD_PART_SIZE, PHOTO_UPLOAD_PART_SIZE } from "./photos";
+import { API_PROTOCOL, RECORD_RECEIPT_TTL_MS, type ConnectionStatus } from "./protocol";
+import { PHOTO_DOWNLOAD_PART_SIZE, PHOTO_UPLOAD_PART_SIZE } from "./photos";
 import { validateNewPassword } from "./password";
 import { AI_TASKS, AI_TEXT_LIMIT, type AiTaskId } from "./ai";
+import { signWebDevice, type WebDevice } from "./web-device";
+import { profileContext, validDisplayName, type WebProfile } from "./web-profile";
+import { thoughtId } from "./companionship";
+import { cipherSnapshotScope, type CipherCache, type SyncPage } from "./web-sync";
+import { recordOutboxScope, type OutboxState, type RecordOutbox } from "./web-outbox";
+import { prepareRecordWrite } from "./record-write";
+import { photoFileId, photoReceiptFor, preparePhotoWrite } from "./photo-write";
 
 function unconfirmedPhotoRequest(error: unknown) {
   return error instanceof AppError && ["TIMEOUT", "NETWORK_ERROR"].includes(error.code);
 }
+function unconfirmedRecordWrite(error: unknown) {
+  return error instanceof AppError && ["TIMEOUT", "NETWORK_ERROR", "INVALID_RESPONSE", "WRITE_UNCONFIRMED"].includes(error.code);
+}
+type PendingSave = { operationId: string; submittedAt: number; record: CipherRecord; expectedRevision: number; photoRefs?: string[] };
 
 export class UsService {
+  displayNames: ReadonlyMap<string, string> = new Map();
+  private profileGeneration = 0;
+  private syncSnapshot?: {
+    scope: string; rows: Map<string, CipherRecord>; cursor: string; cachedAt: number; writeKeyVersion?: number;
+  };
   secrets: Secrets | null = null;
   space: Space | null = null;
   entries: Entry[] = [];
   unreadable = 0;
   lastSyncedAt = 0;
   lastSyncError = "";
+  syncStorageWarning = "";
+  private lockSerial = 0;
   private refreshSerial = 0;
   private mutationSerial = 0;
   private mutations = new Map<
@@ -67,6 +86,7 @@ export class UsService {
     public transport: Transport,
     public storage: StorageAdapter,
     public rng: RandomSource,
+    private readonly features: { recordReceipts?: boolean; managedPhotos?: boolean; cipherCache?: CipherCache; outbox?: RecordOutbox } = {},
   ) {}
   get userId() {
     return this.secrets?.userId || "";
@@ -80,6 +100,13 @@ export class UsService {
   }
   get active() {
     return this.entries.filter((e) => !e.deletedAt);
+  }
+  get hasPrivateAccess() {
+    return !!this.secrets && !this.secrets.sharedOnly;
+  }
+  private requirePrivateAccess(visibility: Visibility) {
+    if (visibility === "private" && !this.hasPrivateAccess)
+      throw new AppError("PRIVATE_KEY_REQUIRED", "请从原设备导出的加密备份恢复私人记录");
   }
   get vault(): Vault | null {
     const v = this.storage.get("vault");
@@ -133,7 +160,7 @@ export class UsService {
       throw error;
     }
   }
-  async createBackup(password: string) {
+  private async verifyCurrentUnlock(password: string) {
     const session = this.secrets;
     const vault = this.vault;
     if (!session || !vault) throw new AppError("LOCKED", "请先解锁");
@@ -141,7 +168,7 @@ export class UsService {
     try {
       verified = await unlockVault(vault, password);
     } catch {
-      throw new AppError("WRONG_PASSWORD", "口令不正确，备份未导出");
+      throw new AppError("WRONG_PASSWORD", "本机解锁口令不正确");
     }
     if (
       this.secrets !== session ||
@@ -149,6 +176,16 @@ export class UsService {
       verified.spaceId !== session.spaceId
     )
       throw new AppError("LOCKED", "会话已改变，请重新解锁");
+    return verified;
+  }
+  async confirmUnlockPassword(password: string) {
+    await this.verifyCurrentUnlock(password);
+  }
+  async createBackup(password: string) {
+    const session = this.secrets;
+    if (!session) throw new AppError("LOCKED", "请先解锁");
+    this.requirePrivateAccess("private");
+    const verified = await this.verifyCurrentUnlock(password);
     if (!verified.recoveryKey) await this.persistSecrets();
     if (this.secrets !== session)
       throw new AppError("LOCKED", "会话已改变，请重新解锁");
@@ -160,6 +197,10 @@ export class UsService {
   async recover(vault: RecoveryVault, recoveryKey: string, password: string) {
     validateNewPassword(password);
     const recovered = recoverVault(vault, recoveryKey);
+    if (recovered.sharedOnly)
+      throw new AppError("PRIVATE_KEY_REQUIRED", "此备份只包含共同空间访问，请使用原设备导出的加密备份");
+    const original = this.secrets;
+    const lockSerial = this.lockSerial;
     const boot = await this.transport.call<{
       userId: string;
       space: Space | null;
@@ -171,14 +212,29 @@ export class UsService {
       throw new AppError("IDENTITY_MISMATCH", "备份不属于当前账号和空间");
     if (!["active", "closing"].includes(boot.space.status))
       throw new AppError("SPACE_CLOSED", "这个空间已经关闭，无法恢复云端访问");
-    this.setVaultKey(await deriveVaultKey(password, b64(await this.rng(16))));
-    this.secrets = recovered;
-    this.space = boot.space;
-    this.secrets.deviceId = await randomId(this.rng); // A recovered device never reuses a revoked device ID.
-    this.secrets.encryptionSecret = b64(await this.rng(32));
-    this.secrets.signingSecret = b64(await this.rng(32));
-    await this.registerDevice();
-    await this.persistSecrets();
+    // Drafts live only in this browser and keep their local key during same-space recovery.
+    delete recovered.localDraftKey;
+    if (original?.userId === recovered.userId && original.spaceId === recovered.spaceId)
+      recovered.localDraftKey = original.localDraftKey ?? original.personalKey;
+    const source = { deviceId: recovered.deviceId, signingSecret: recovered.signingSecret };
+    recovered.deviceId = await randomId(this.rng);
+    recovered.encryptionSecret = b64(await this.rng(32));
+    recovered.signingSecret = b64(await this.rng(32));
+    const access = await deriveVaultKey(password, b64(await this.rng(16)));
+    try {
+      const current = () => this.lockSerial === lockSerial && this.secrets === original;
+      const sealed = await sealVaultWithKey(recovered, access, this.rng, recoveryKey);
+      if (!current()) throw new AppError("LOCKED", "会话已改变，请重新恢复");
+      await this.registerKeys(recovered, source);
+      if (!current()) throw new AppError("LOCKED", "会话已改变，请重新恢复");
+      this.storage.set("vault", JSON.stringify(sealed.vault));
+      this.lock();
+      this.setVaultKey({ salt: access.salt, key: access.key.slice() });
+      this.secrets = recovered;
+      this.space = boot.space;
+    } finally {
+      access.key.fill(0);
+    }
     if (this.ready) await this.refresh();
   }
   async bootstrap() {
@@ -188,7 +244,7 @@ export class UsService {
     }>("bootstrap");
     if (this.secrets && this.secrets.userId !== boot.userId) {
       this.lock();
-      throw new AppError("IDENTITY_MISMATCH", "恢复包不属于当前微信账号");
+      throw new AppError("IDENTITY_MISMATCH", "恢复包不属于当前账号");
     }
     this.space = boot.space;
     if (this.space && ["closed", "purging"].includes(this.space.status)) {
@@ -275,6 +331,7 @@ export class UsService {
       throw new AppError("MEMBER_REQUIRED", "当前账号没有可登记设备的双人空间");
     const secrets = await newSecrets(this.rng, userId);
     secrets.spaceId = space.id;
+    secrets.sharedOnly = true;
     this.setVaultKey(await deriveVaultKey(password, b64(await this.rng(16))));
     this.secrets = secrets;
     this.space = space;
@@ -288,12 +345,24 @@ export class UsService {
   }
   async registerDevice() {
     if (!this.secrets || !this.space) return;
-    await this.transport.call("registerDevice", {
-      spaceId: this.space.id,
-      id: this.secrets.deviceId,
-      ...publicKeys(this.secrets),
+    await this.registerKeys(this.secrets);
+  }
+  private async registerKeys(secrets: Secrets, source?: { deviceId: string; signingSecret: string }) {
+    const device: WebDevice = {
+      spaceId: secrets.spaceId,
+      id: secrets.deviceId,
+      ...publicKeys(secrets),
+      ...(secrets.sharedOnly ? { sharedOnly: true } : {}),
       label: "我的设备",
+    };
+    if (!this.transport.webDeviceChallenges) return this.transport.call("registerDevice", device);
+    const { nonce } = await this.transport.call<{ nonce: string }>("deviceChallenge", {
+      spaceId: device.spaceId, id: device.id,
     });
+    const recovery = !secrets.sharedOnly && secrets.recoveryKey
+      ? { userId: secrets.userId, key: secrets.recoveryKey } : undefined;
+    const proof = signWebDevice(device, nonce, secrets.signingSecret, recovery, source);
+    return this.transport.call("registerDevice", { ...device, proof });
   }
   async call<T>(action: string, data: Record<string, unknown> = {}) {
     if (!this.secrets || !this.space) throw new AppError("LOCKED", "请先解锁");
@@ -304,29 +373,119 @@ export class UsService {
       deviceId: this.secrets.deviceId,
     });
   }
+  get cipherCacheEnabled() {
+    return !!this.features.cipherCache?.enabled;
+  }
+  async setCipherCacheEnabled(enabled: boolean) {
+    const cache = this.features.cipherCache;
+    if (!cache) return;
+    this.storage.set("cipherCache", String(enabled));
+    if (enabled) await this.refresh();
+    else {
+      await cache.clear();
+      if (this.syncSnapshot) this.syncSnapshot.cachedAt = 0;
+      this.syncStorageWarning = "";
+    }
+  }
+  private async loadWebRows(session: Secrets, space: Space, current: () => boolean) {
+    const scope = cipherSnapshotScope(session);
+    const saved = this.syncSnapshot?.scope === scope ? this.syncSnapshot : undefined;
+    const cache = this.features.cipherCache;
+    let rows = new Map(saved?.rows);
+    let cursor = saved?.cursor;
+    let cachedAt = saved?.cachedAt ?? 0;
+    const writeKeyVersion = space.status === "active" && session.spaceKeys[space.keyVersion] ? space.keyVersion : undefined;
+    let changed = writeKeyVersion !== saved?.writeKeyVersion;
+    if (!saved && cache?.enabled) {
+      try {
+        const persisted = await cache.read(scope);
+        if (persisted) {
+          rows = new Map(persisted.records.map((record) => [record.id, record]));
+          cursor = persisted.cursor;
+        }
+      } catch { /* Server snapshot remains available with restricted browser storage. */ }
+    }
+    let reset = false;
+    while (current()) {
+      let page: SyncPage;
+      try {
+        page = await this.call<SyncPage>("syncRecords", cursor ? { cursor } : {});
+      } catch (error) {
+        if (!cursor || reset || !(error instanceof AppError) || error.code !== "SYNC_RESET") throw error;
+        rows = new Map();
+        cursor = undefined;
+        reset = true;
+        changed = true;
+        continue;
+      }
+      if (!current()) return;
+      for (const record of page.records) rows.set(record.id, record);
+      for (const recordId of page.removed) rows.delete(recordId);
+      changed ||= page.records.length > 0 || page.removed.length > 0;
+      cursor = page.cursor;
+      if (!page.more) {
+        if (cache?.enabled && (changed || Date.now() - cachedAt > 3600000)) {
+          try {
+            await cache.write(scope, { records: [...rows.values()], cursor, writeKeyVersion });
+            if (current()) this.syncStorageWarning = "";
+          } catch {
+            if (current()) this.syncStorageWarning = "无法保存回忆的浏览器密文缓存，联机同步仍可使用";
+          }
+          cachedAt = Date.now();
+        }
+        return { scope, rows, cursor, cachedAt, writeKeyVersion };
+      }
+    }
+  }
   async refresh() {
     const session = this.secrets;
     const serial = ++this.refreshSerial;
     const startedAtMutation = this.mutationSerial;
+    const profileGeneration = this.profileGeneration;
+    const current = () => this.secrets === session && serial === this.refreshSerial;
     if (!session || !this.space) throw new AppError("LOCKED", "请先解锁");
     try {
-      const space = await this.call<Space>("getSpace");
+      const { profiles, ...space } = await this.call<Space & { profiles?: WebProfile[] }>("getSpace");
       if (this.secrets !== session || serial !== this.refreshSerial) return;
       this.space = space;
       await this.verifyCurrentKey();
       if (this.secrets !== session || serial !== this.refreshSerial) return;
-      let offset: number | null = 0;
+      if (profiles && profileGeneration === this.profileGeneration) {
+        const displayNames = new Map<string, string>();
+        for (const { userId, envelope } of profiles) {
+          const key = session.spaceKeys[envelope.keyVersion];
+          if (!key || !space.members.includes(userId)) continue;
+          try {
+            const name = open<unknown>(envelope, unb64(key), profileContext(space.id, userId));
+            if (validDisplayName(name)) displayNames.set(userId, name);
+          } catch { /* Skip a profile whose key is unavailable or envelope was replaced. */ }
+        }
+        this.displayNames = displayNames;
+      }
       const rows: CipherRecord[] = [];
-      do {
-        const page: { records: CipherRecord[]; nextOffset: number | null } =
-          await this.call("listRecords", { offset });
-        rows.push(...page.records);
-        offset = page.nextOffset;
-        if (this.secrets !== session || serial !== this.refreshSerial) return;
-      } while (offset !== null);
+      const snapshot = this.transport.webRecordSync ? await this.loadWebRows(session, space, current) : undefined;
+      if (!current()) return;
+      if (snapshot) {
+        for (const row of snapshot.rows.values()) rows.push(row);
+      } else {
+        let pageInput: { after: string } | { offset: number } | null =
+          this.transport.webDeviceChallenges ? { after: "" } : { offset: 0 };
+        while (pageInput) {
+          const page: { records: CipherRecord[]; nextOffset?: number | null; nextAfter?: string | null } =
+            await this.call("listRecords", pageInput);
+          rows.push(...page.records);
+          if ("after" in pageInput && typeof page.nextAfter === "string") {
+            if (page.nextAfter <= pageInput.after)
+              throw new AppError("INVALID_RESPONSE", "记录分页游标无效");
+            pageInput = { after: page.nextAfter };
+          } else pageInput = typeof page.nextOffset === "number" ? { offset: page.nextOffset } : null;
+          if (!current()) return;
+        }
+      }
       const entries: Entry[] = [];
       let unreadable = 0;
       for (const r of rows) {
+        if (session.sharedOnly && r.visibility === "private") continue;
         try {
           entries.push({ ...r, data: decryptRecord<Payload>(r, session) });
         } catch {
@@ -345,6 +504,7 @@ export class UsService {
           b.data.date.localeCompare(a.data.date) || b.createdAt - a.createdAt,
       );
       this.unreadable = unreadable;
+      this.syncSnapshot = snapshot;
       this.lastSyncedAt = Date.now();
       this.lastSyncError = "";
     } catch (error) {
@@ -353,6 +513,55 @@ export class UsService {
           error instanceof Error ? error.message : "同步暂时不可用";
       throw error;
     }
+  }
+  async saveDisplayName(value: string) {
+    const session = this.secrets;
+    const space = this.space;
+    const key = session && space && session.spaceKeys[space.keyVersion];
+    if (!session || !space || !key) throw new AppError("LOCKED", "请先解锁共同空间");
+    const name = value.trim();
+    if (!validDisplayName(name))
+      throw new AppError("INVALID_DISPLAY_NAME", "昵称最多 16 个字符，不能包含控制字符");
+    const envelope = await seal(name, unb64(key), profileContext(space.id, session.userId), this.rng, space.keyVersion);
+    if (this.secrets !== session) throw new AppError("LOCKED", "会话已改变，请重新解锁");
+    await this.call("setSpaceProfile", { envelope });
+    if (this.secrets !== session) return;
+    this.profileGeneration++;
+    this.displayNames = new Map(this.displayNames).set(session.userId, name);
+  }
+  async sendThought(date: string, replyTo?: string) {
+    const space = this.space;
+    const userId = this.userId;
+    if (!space || !userId || space.members.length !== 2)
+      throw new AppError("MEMBER_REQUIRED", "两位成员都加入后可以发送想你");
+    if (replyTo && !this.active.some((entry) =>
+      entry.id === replyTo && entry.creatorId !== userId && entry.visibility === "shared" &&
+      entry.data.kind === "thought" && !entry.data.targetId,
+    )) throw new AppError("THOUGHT_UNAVAILABLE", "这条想你已撤回或暂不可用");
+    const id = thoughtId(space.id, userId, date, replyTo);
+    const existing = this.entries.find((entry) => entry.id === id && entry.creatorId === userId);
+    if (existing && !existing.deletedAt) return;
+    if (existing) {
+      await this.trash(existing, true);
+      return;
+    }
+    try {
+      await this.save({
+        kind: "thought", title: replyTo ? "我也想你" : "想你", date,
+        ...(replyTo ? { targetId: replyTo } : {}),
+      }, "shared", undefined, id);
+    } catch (error) {
+      if (!(error instanceof AppError) || error.code !== "REVISION_CONFLICT") throw error;
+      await this.refresh();
+      if (!this.active.some((entry) => entry.id === id && entry.creatorId === userId)) throw error;
+    }
+  }
+  async withdrawThought(id: string) {
+    const thought = this.active.find((entry) =>
+      entry.id === id && entry.creatorId === this.userId && entry.data.kind === "thought",
+    );
+    if (!thought) throw new AppError("THOUGHT_UNAVAILABLE", "当前没有可撤回的想你");
+    await this.trash(thought);
   }
   async checkConnection(): Promise<ConnectionStatus> {
     const status = await this.transport.call<ConnectionStatus>("health");
@@ -366,65 +575,230 @@ export class UsService {
   private rememberMutation(id: string, entry: Entry | null) {
     this.mutations.set(id, { serial: ++this.mutationSerial, entry });
   }
-  async save(
+  private async mutationStatus<T>(action: string, operationId: string): Promise<T | null> {
+    const receipt = await this.call<{ action: string; result: T } | null>("mutationStatus", { operationId });
+    if (receipt && receipt.action !== action) throw new AppError("OPERATION_REUSED", "该保存编号已有其它用途");
+    return receipt?.result ?? null;
+  }
+  private async submitMutation<T>(action: string, request: Record<string, unknown> & { operationId?: string }): Promise<T> {
+    if (!request.operationId) return this.call<T>(action, request);
+    const session = this.secrets;
+    const confirm = () => this.mutationStatus<T>(action, request.operationId!).catch(() => {
+      throw new AppError("WRITE_UNCONFIRMED", "暂时无法核对保存结果，请联网后重试核对");
+    });
+    try {
+      return await this.call<T>(action, request);
+    } catch (error) {
+      if (!unconfirmedRecordWrite(error) || session !== this.secrets) throw error;
+    }
+    try {
+      const saved = await confirm();
+      if (saved) return saved;
+      if (session !== this.secrets) throw new AppError("LOCKED", "会话已改变，请重新解锁后核对保存结果");
+      return await this.call<T>(action, request);
+    } catch (error) {
+      if (!unconfirmedRecordWrite(error) || session !== this.secrets) throw error;
+    }
+    const saved = await confirm();
+    if (saved) return saved;
+    throw new AppError("WRITE_UNCONFIRMED", "保存结果仍未确认，请联网后核对");
+  }
+  private get pendingSave(): PendingSave | null {
+    const raw = this.storage.get("pendingRecordSave");
+    if (!raw) return null;
+    try { return JSON.parse(raw); } catch { return null; }
+  }
+  get hasPendingSave() {
+    return !!this.space && this.pendingSave?.record?.spaceId === this.space.id;
+  }
+  private clearPendingSave(operationId: string) {
+    if (this.pendingSave?.operationId === operationId) this.storage.remove("pendingRecordSave");
+  }
+  async resumePendingSave() {
+    const pending = this.pendingSave;
+    if (!pending || !this.hasPendingSave) return false;
+    const session = this.secrets;
+    if (!session) throw new AppError("LOCKED", "请先解锁");
+    this.requirePrivateAccess(pending.record.visibility);
+    const { submittedAt, ...request } = pending;
+    try {
+      const saved = await this.mutationStatus<RecordMeta>("putRecord", request.operationId);
+      if (session !== this.secrets) throw new AppError("LOCKED", "会话已改变，请重新解锁后核对");
+      if (!saved && Date.now() - submittedAt >= RECORD_RECEIPT_TTL_MS)
+        throw new AppError("RECEIPT_EXPIRED", "确认期限已过，请刷新并核对记录后再决定是否重写");
+      if (!saved) await this.submitMutation<RecordMeta>("putRecord", request);
+    } catch (error) {
+      if (error instanceof AppError && ["REVISION_CONFLICT", "KEY_VERSION_MISMATCH", "RECEIPT_EXPIRED"].includes(error.code))
+        this.clearPendingSave(request.operationId);
+      throw error;
+    }
+    if (session !== this.secrets) throw new AppError("LOCKED", "会话已改变，请重新解锁后核对");
+    this.clearPendingSave(request.operationId);
+    await this.refresh().catch(() => {});
+    return { id: request.record.id, expectedRevision: request.expectedRevision };
+  }
+  private outboxScope() {
+    const session = this.secrets;
+    if (!session || this.space?.id !== session.spaceId) throw new AppError("LOCKED", "请先解锁");
+    return recordOutboxScope(session);
+  }
+  get supportsOutbox() { return !!this.features.outbox; }
+  async prepareQueuedPhoto(bytes: string, mime: string, name: string, visibility: Visibility) {
+    const session = this.secrets;
+    const space = this.space;
+    if (!session || !space || !this.ready) throw new AppError("LOCKED", "请先解锁");
+    const prepared = await preparePhotoWrite(bytes, mime, name, visibility, session, space.keyVersion, this.rng);
+    if (this.secrets !== session || this.space?.id !== space.id) throw new AppError("LOCKED", "请先解锁");
+    return prepared;
+  }
+  async queueSave(data: Payload, visibility: Visibility, existing?: Entry, attachments: { fileId: string; envelope: Envelope }[] = []) {
+    const outbox = this.features.outbox;
+    if (!outbox) throw new AppError("OUTBOX_UNAVAILABLE", "当前入口无法保存待同步记录");
+    const scope = this.outboxScope();
+    const request = await this.prepareSave(data, visibility, existing);
+    if (!request.operationId) throw new AppError("OUTBOX_UNAVAILABLE", "当前入口无法生成保存回执");
+    await outbox.add({
+      scope, operationId: request.operationId, queuedAt: Date.now(), record: request.record,
+      expectedRevision: request.expectedRevision, photoRefs: request.photoRefs, state: "queued", attachments,
+    });
+  }
+  async listOutbox() {
+    const session = this.secrets;
+    if (!session || !this.features.outbox) return [];
+    const items = await this.features.outbox.read(this.outboxScope());
+    if (this.secrets !== session) return [];
+    return items.filter(({ record }) => record.visibility === "shared" ||
+      (!session.sharedOnly && record.creatorId === session.userId)).map((item) => {
+      let data: Payload | undefined;
+      try { data = decryptRecord<Payload>(item.record, session); } catch { /* Key may be unavailable after recovery. */ }
+      return { operationId: item.operationId, state: item.state, queuedAt: item.queuedAt, data };
+    });
+  }
+  async discardOutbox(operationId: string) {
+    const outbox = this.features.outbox;
+    if (!outbox || !(await this.listOutbox()).some((item) => item.operationId === operationId)) return;
+    const scope = this.outboxScope();
+    const removed = await outbox.exclusive(scope, async () => {
+      await outbox.remove(scope, operationId);
+      return true;
+    });
+    if (!removed) throw new AppError("OUTBOX_BUSY", "另一个标签页正在同步，请稍后重试");
+  }
+  async flushOutbox(operationId?: string) {
+    const outbox = this.features.outbox;
+    const session = this.secrets;
+    if (!outbox || !session || !this.ready) return 0;
+    const scope = this.outboxScope();
+    const sent = await outbox.exclusive(scope, async () => {
+      if (this.secrets !== session) return 0;
+      const items = (await outbox.read(scope)).filter((item) =>
+        (operationId ? item.operationId === operationId : ["queued", "retry"].includes(item.state)) &&
+        (item.record.visibility === "shared" || (!session.sharedOnly && item.record.creatorId === session.userId)),
+      );
+      if (!items.length || this.secrets !== session) return 0;
+      const space = await this.call<Space>("getSpace");
+      if (this.secrets !== session) return 0;
+      if (space.status !== "active") throw new AppError("SPACE_CLOSING", "空间处于只读期，待同步日记保留在本机");
+      let sent = 0;
+      for (const item of items) {
+        if (this.secrets !== session) break;
+        const { record, expectedRevision, photoRefs, operationId: itemId } = item;
+        let state: OutboxState = "retry";
+        try {
+          const saved = await this.mutationStatus<RecordMeta>("putRecord", itemId);
+          if (this.secrets !== session) break;
+          if (!saved) {
+            if (Date.now() - item.queuedAt >= RECORD_RECEIPT_TTL_MS) {
+              await outbox.set({ ...item, state: "expired" });
+              continue;
+            }
+            if (item.attachments?.length && record.envelope.keyVersion !== space.keyVersion)
+              throw new AppError("KEY_VERSION_MISMATCH", "空间密钥已更新，请核对待同步日记");
+            for (const { fileId, envelope } of item.attachments ?? []) {
+              const receipt = photoReceiptFor(record.visibility, envelope);
+              if (photoFileId(space.id, session.userId, receipt) !== fileId || !photoRefs?.includes(fileId) ||
+                envelope.keyVersion !== record.envelope.keyVersion)
+                throw new AppError("INVALID_ATTACHMENT", "本机照片和待同步记录不匹配");
+              const status = await this.call<{ id: string | null }>("fileUploadStatus", { receipt });
+              if (this.secrets !== session) throw new AppError("LOCKED", "会话已改变，请重新解锁");
+              const uploaded = status.id ?? await this.uploadPhotoEnvelope(envelope, record.visibility, undefined, true);
+              if (uploaded !== fileId) throw new AppError("INVALID_ATTACHMENT", "照片回执不匹配，请保留本机日记");
+            }
+            if (this.secrets !== session) throw new AppError("LOCKED", "会话已改变，请重新解锁");
+            await this.submitMutation<RecordMeta>("putRecord", { operationId: itemId, record, expectedRevision, photoRefs });
+          }
+          await outbox.remove(scope, itemId);
+          sent++;
+          continue;
+        } catch (error) {
+          if (!(error instanceof AppError)) throw error;
+          if (["AUTH_REQUIRED", "DEVICE_REVOKED", "DEVICE_UNBOUND", "MEMBER_REQUIRED"].includes(error.code)) {
+            await outbox.set({ ...item, state: "blocked" });
+            throw error;
+          }
+          if (error.code === "REVISION_CONFLICT") state = "conflict";
+          else if (!unconfirmedRecordWrite(error) && !["PHOTO_PART_UNAVAILABLE", "PHOTO_PART_MISSING",
+            "PHOTO_STATUS_UNAVAILABLE", "PHOTO_NOT_CONFIRMED", "PHOTO_STORAGE_LOW", "LOCKED"].includes(error.code)) state = "blocked";
+        }
+        await outbox.set({ ...item, state });
+        if (state === "retry" || this.secrets !== session) break;
+      }
+      if (sent && this.secrets === session) await this.refresh().catch(() => {});
+      return sent;
+    });
+    if (sent === undefined) throw new AppError("OUTBOX_BUSY", "另一个标签页正在同步，请稍后重试");
+    return sent;
+  }
+  private async prepareSave(
     data: Payload,
     visibility: Visibility = "shared",
     existing?: Entry,
     fixedId?: string,
   ) {
-    if (!this.secrets || !this.space) throw new AppError("LOCKED", "请先解锁");
     const session = this.secrets;
-    if (this.space.status !== "active")
+    const space = this.space;
+    if (!session || !space) throw new AppError("LOCKED", "请先解锁");
+    if (space.status !== "active")
       throw new AppError(
         "SPACE_CLOSING",
         "空间正在关闭冷静期，只能查看、导出或撤销关闭",
       );
-    if (!data.title.trim())
-      throw new AppError("TITLE_REQUIRED", "写个小标题吧");
-    dayNumber(data.date);
-    if (data.kind === "capsule") dayNumber(data.unlockDate || "");
-    if (
-      existing &&
-      data.kind === "memory" &&
-      (data.title !== existing.data.title || data.body !== existing.data.body)
-    )
-      data = {
-        ...data,
-        history: [
-          ...(existing.data.history || []),
-          {
-            at: Date.now(),
-            title: existing.data.title,
-            body: existing.data.body || "",
-          },
-        ].slice(-10),
-      };
-    const meta = {
-      id: existing?.id || fixedId || (await randomId(this.rng)),
-      spaceId: this.space.id,
-      creatorId: existing?.creatorId || this.userId,
-      visibility: existing?.visibility || visibility,
-      revision: existing?.revision || 0,
-      createdAt: existing?.createdAt || Date.now(),
-      updatedAt: Date.now(),
-    };
-    const record = await encryptRecord(
-      meta,
-      data,
-      this.secrets,
-      this.rng,
-      this.space.keyVersion,
-    );
-    const saved = await this.call<CipherRecord>("putRecord", {
-      record,
-      expectedRevision: meta.revision,
-    });
+    const prepared = await prepareRecordWrite(data, visibility, session, space.keyVersion, this.rng, existing, fixedId);
+    const operationId = this.features.recordReceipts ? await randomId(this.rng) : undefined;
+    if (this.secrets !== session || this.space?.id !== space.id)
+      throw new AppError("LOCKED", "会话已改变，请重新解锁后保存记录");
+    return { ...prepared, operationId, photoRefs: this.features.managedPhotos ? prepared.photoRefs : undefined, session };
+  }
+  async save(
+    data: Payload,
+    visibility: Visibility = "shared",
+    existing?: Entry,
+    fixedId?: string,
+    keepPending = false,
+  ) {
+    const { data: preparedData, session, ...request } = await this.prepareSave(data, visibility, existing, fixedId);
+    const { operationId } = request;
+    const persist = keepPending && this.features.recordReceipts;
+    if (persist) {
+      if (this.hasPendingSave) throw new AppError("WRITE_UNCONFIRMED", "请先核对上一条未确认的保存");
+      this.storage.set("pendingRecordSave", JSON.stringify({ ...request, submittedAt: Date.now() }));
+    }
+    let saved: RecordMeta;
+    try {
+      saved = await this.submitMutation<RecordMeta>("putRecord", request);
+    } catch (error) {
+      if (persist && operationId && this.secrets === session && !unconfirmedRecordWrite(error)) this.clearPendingSave(operationId);
+      throw error;
+    }
     if (this.secrets !== session)
       throw new AppError(
         "SESSION_CHANGED",
         "当前会话已锁定，记录未重新显示；解锁后请刷新查看云端保存结果",
       );
-    const entry = { ...saved, data };
+    if (persist && operationId) this.clearPendingSave(operationId);
+    const entry = { ...saved, data: preparedData };
+    const newer = this.entries.find((current) => current.id === entry.id && current.revision > entry.revision);
+    if (newer) return newer;
     this.rememberMutation(entry.id, entry);
     this.entries = [
       entry,
@@ -436,12 +810,16 @@ export class UsService {
     return entry;
   }
   async trash(entry: Entry, restore = false) {
+    this.requirePrivateAccess(entry.visibility);
     const session = this.secrets;
-    const saved = await this.call<CipherRecord>(
+    const operationId = this.features.recordReceipts ? await randomId(this.rng) : undefined;
+    if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+    const saved = await this.submitMutation<RecordMeta>(
       restore ? "restoreRecord" : "deleteRecord",
       {
         recordId: entry.id,
         expectedRevision: entry.revision,
+        operationId,
       },
     );
     if (this.secrets !== session)
@@ -454,17 +832,21 @@ export class UsService {
     await this.refresh();
   }
   async purge(entry: Entry) {
+    this.requirePrivateAccess(entry.visibility);
     const session = this.secrets;
-    await this.call("purgeRecord", {
+    const operationId = this.features.recordReceipts ? await randomId(this.rng) : undefined;
+    if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+    const { deletedFileIds } = await this.submitMutation<{ deletedFileIds?: string[] }>("purgeRecord", {
       recordId: entry.id,
       expectedRevision: entry.revision,
+      operationId,
     });
     if (this.secrets !== session)
       throw new AppError("SESSION_CHANGED", "当前会话已锁定，请解锁后刷新");
     this.rememberMutation(entry.id, null);
     this.entries = this.entries.filter((e) => e.id !== entry.id);
     for (const p of entry.data.photos || [])
-      if (p.fileId) await this.call("fileDelete", { fileId: p.fileId });
+      if (p.fileId && !deletedFileIds?.includes(p.fileId)) await this.call("fileDelete", { fileId: p.fileId });
     await this.refresh();
   }
   async favorite(entry: Entry) {
@@ -588,28 +970,25 @@ export class UsService {
     visibility: Visibility,
     onUploadProgress?: (sent: number, total: number) => void,
   ): Promise<Attachment> {
-    if (!["image/jpeg", "image/png", "image/webp"].includes(mime))
-      throw new AppError("INVALID_IMAGE", "支持 JPG、PNG 和 WebP 图片");
-    if (base64ByteLength(bytes) > MAX_PHOTO_BYTES)
-      throw new AppError("FILE_TOO_LARGE", "请使用小于 500 KB 的照片");
     const session = this.secrets;
     const space = this.space;
     if (!session || !space) throw new AppError("LOCKED", "请先解锁");
-    const photoId = await randomId(this.rng);
-    if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
-    const aad = `Us/file/1/${space.id}/${photoId}/${visibility}`;
-    const version = space.keyVersion;
-    const key = unb64(
-      visibility === "private"
-        ? session.personalKey
-        : session.spaceKeys[version],
-    );
-    const envelope = await seal({ base64: bytes }, key, aad, this.rng, version);
-    if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
-    const receipt = hashText(JSON.stringify([visibility, envelope]));
+    this.requirePrivateAccess(visibility);
+    const { photo, envelope } = await preparePhotoWrite(bytes, mime, name, visibility, session, space.keyVersion, this.rng);
+    if (this.secrets !== session || this.space?.id !== space.id) throw new AppError("LOCKED", "请先解锁");
+    return { ...photo, fileId: await this.uploadPhotoEnvelope(envelope, visibility, onUploadProgress) };
+  }
+  private async uploadPhotoEnvelope(
+    envelope: Envelope, visibility: Visibility, onUploadProgress?: (sent: number, total: number) => void,
+    segmented = !!onUploadProgress,
+  ) {
+    const session = this.secrets;
+    if (!session) throw new AppError("LOCKED", "请先解锁");
+    const receipt = photoReceiptFor(visibility, envelope);
+    const managed = this.features.managedPhotos ? { managed: true } : {};
     const upload = async () => {
       const { ciphertext, ...header } = envelope;
-      if (onUploadProgress) {
+      if (segmented) {
         const total = Math.ceil(ciphertext.length / PHOTO_UPLOAD_PART_SIZE);
         for (let index = 0; index < total; index++) {
           if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
@@ -629,10 +1008,10 @@ export class UsService {
               throw retryError;
             });
           }
-          onUploadProgress(index + 1, total);
+          onUploadProgress?.(index + 1, total);
           if (index + 1 === total) {
             if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
-            const finalize = { receipt, visibility, header };
+            const finalize = { receipt, visibility, header, ...managed };
             try {
               return await this.call<{ id: string }>("fileUploadCommit", finalize);
             } catch (error) {
@@ -644,7 +1023,7 @@ export class UsService {
         }
       }
       if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
-      return this.call<{ id: string }>("filePut", { envelope, visibility, receipt });
+      return this.call<{ id: string }>("filePut", { envelope, visibility, receipt, ...managed });
     };
     let fileId: string;
     try {
@@ -661,19 +1040,14 @@ export class UsService {
         throw new AppError("PHOTO_NOT_CONFIRMED", "P01 云端暂未查到照片");
       fileId = status.id;
     }
-    return {
-      id: photoId,
-      fileId,
-      name,
-      mime,
-      bytes: base64ByteLength(bytes),
-    };
+    return fileId;
   }
   async readPhoto(photo: Attachment, visibility: Visibility, active?: () => boolean): Promise<string> {
     if (photo.sample) return `/assets/${photo.sample}.svg`;
     const session = this.secrets;
     const space = this.space;
     if (!session || !space) throw new AppError("LOCKED", "请先解锁");
+    this.requirePrivateAccess(visibility);
     const checkSession = () => {
       if (this.secrets !== session || this.space?.id !== space.id || (active && !active()))
         throw new AppError("PHOTO_CACHE_EXPIRED", "照片缓存已过期");
@@ -700,34 +1074,33 @@ export class UsService {
       return { envelope: { ...first.envelope, ciphertext: chunks.join("") } };
     });
     checkSession();
-    const key = unb64(
-      visibility === "private"
-        ? session.personalKey
-        : session.spaceKeys[envelope.keyVersion],
-    );
-    return open<{ base64: string }>(
-      envelope,
-      key,
-      `Us/file/1/${space.id}/${photo.id}/${visibility}`,
-    ).base64;
+    const content = decryptPhoto(envelope, session, photo.id, visibility);
+    const cache = this.features.cipherCache;
+    if (fileId && cache?.enabled) {
+      await cache.writePhoto(cipherSnapshotScope(session), fileId, envelope).catch(() => {});
+      checkSession();
+    }
+    return content;
   }
-  async saveDraft(data: unknown) {
-    if (!this.secrets) return;
+  async saveDraft(data: unknown, slot = "draft") {
+    const session = this.secrets;
+    if (!session) throw new AppError("LOCKED", "请先解锁");
     const envelope = await seal(
       data,
-      unb64(this.secrets.personalKey),
-      `Us/draft/${this.userId}`,
+      unb64(session.localDraftKey ?? session.personalKey),
+      `Us/draft/${session.userId}${slot === "draft" ? "" : `/${slot}`}`,
       this.rng,
     );
-    this.storage.set("draft", JSON.stringify(envelope));
+    if (this.secrets !== session) throw new AppError("LOCKED", "草稿未保存，请重新解锁");
+    this.storage.set(slot, JSON.stringify(envelope));
   }
-  loadDraft<T>(): T | null {
-    const draft = this.storage.get("draft");
+  loadDraft<T>(slot = "draft"): T | null {
+    const draft = this.storage.get(slot);
     return draft && this.secrets
       ? open<T>(
           JSON.parse(draft),
-          unb64(this.secrets.personalKey),
-          `Us/draft/${this.userId}`,
+          unb64(this.secrets.localDraftKey ?? this.secrets.personalKey),
+          `Us/draft/${this.userId}${slot === "draft" ? "" : `/${slot}`}`,
         )
       : null;
   }
@@ -883,14 +1256,20 @@ export class UsService {
     await this.refresh();
   }
   lock() {
+    this.syncSnapshot = undefined;
+    this.displayNames = new Map();
+    this.profileGeneration++;
+    ++this.lockSerial;
     ++this.refreshSerial;
     this.mutations.clear();
     this.lastSyncedAt = 0;
     this.lastSyncError = "";
+    this.syncStorageWarning = "";
     this.secrets = null;
     this.vaultKey?.key.fill(0);
     this.vaultKey = null;
     this.entries = [];
+    this.unreadable = 0;
     this.space = null;
   }
   async seedDemo() {

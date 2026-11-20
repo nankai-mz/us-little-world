@@ -34,6 +34,7 @@ export async function fitPhoto<T>(
     height: number,
     quality: number,
   ) => Promise<PreparedPhoto<T>>,
+  { alwaysEncode = false } = {},
 ): Promise<PreparedPhoto<T>> {
   if (
     !Number.isFinite(source.size) ||
@@ -41,7 +42,7 @@ export async function fitPhoto<T>(
     source.size > MAX_SOURCE_PHOTO_BYTES
   )
     throw new AppError("INVALID_IMAGE", "请选择 25 MB 以内的照片");
-  if (source.size <= MAX_PHOTO_BYTES && PHOTO_MIMES.includes(source.mime))
+  if (!alwaysEncode && source.size <= MAX_PHOTO_BYTES && PHOTO_MIMES.includes(source.mime))
     return source;
   const steps = [
     [1920, 82],

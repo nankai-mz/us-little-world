@@ -8,27 +8,49 @@ import {
 import { browserRandom, hashText, recoverVault } from "../src/core/crypto";
 import { UsService } from "../src/core/service";
 import { createTransport } from "../src/core/transport";
+import { createCipherCache, setOfflineAccount } from "./cipherCache";
+import { webOutbox } from "./recordOutbox";
 
 export function createHostedService(account: string, sessionEnded: () => void) {
   const prefix = `us.web.${account}.`;
   const transport = createTransport(async (action, data) => {
+    const unlocked = service.secrets;
     const response = await fetch("/api/space", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Us-Account": account },
       body: JSON.stringify({ action, data }),
     });
     if (response.status === 401) {
+      service.lock();
       sessionEnded();
       throw new AppError("AUTH_REQUIRED", "网站登录已过期，请重新登录");
     }
     if (response.status >= 500) throw new Error("Website unavailable");
-    return response.json();
+    const result = await response.json();
+    if (["DEVICE_REVOKED", "DEVICE_UNBOUND", "MEMBER_REQUIRED", "SPACE_CLOSED"].includes(result.error?.code))
+      setOfflineAccount(null);
+    if (action === "getSpace" && result.success && unlocked && unlocked === service.secrets)
+      setOfflineAccount(result.data?.status === "active" ? account : null);
+    return result;
   });
-  return new UsService(transport, {
-    get: (key) => localStorage.getItem(prefix + key),
-    set: (key, value) => localStorage.setItem(prefix + key, value),
-    remove: (key) => localStorage.removeItem(prefix + key),
-  }, browserRandom);
+  transport.webDeviceChallenges = true;
+  transport.webRecordSync = true;
+  const accessStorage = <T>(operation: () => T): T => {
+    try { return operation(); }
+    catch {
+      throw new AppError("LOCAL_STORAGE_UNAVAILABLE", "浏览器本机存储不可用或空间不足，请释放空间后重试");
+    }
+  };
+  const cipherCache = createCipherCache(account, () => {
+    try { return localStorage.getItem(prefix + "cipherCache") === "true"; }
+    catch { return false; }
+  });
+  const service = new UsService(transport, {
+    get: (key) => accessStorage(() => localStorage.getItem(prefix + key)),
+    set: (key, value) => accessStorage(() => localStorage.setItem(prefix + key, value)),
+    remove: (key) => accessStorage(() => localStorage.removeItem(prefix + key)),
+  }, browserRandom, { recordReceipts: true, managedPhotos: true, cipherCache, outbox: webOutbox });
+  return service;
 }
 export function createBrowserService(mode: "demo" | "personal") {
   const prefix = `us.${mode}.`;
@@ -144,10 +166,10 @@ export function commitBackup(
 }
 export function download(
   name: string,
-  data: string,
+  data: string | Blob,
   mime = "application/json",
 ) {
-  const url = URL.createObjectURL(new Blob([data], { type: mime }));
+  const url = URL.createObjectURL(typeof data === "string" ? new Blob([data], { type: mime }) : data);
   const a = document.createElement("a");
   a.href = url;
   a.download = name;

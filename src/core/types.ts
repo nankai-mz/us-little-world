@@ -1,3 +1,6 @@
+import type { MealPlan } from "./meal-plan";
+import type { WardrobeSelection, WardrobeSuggestion } from "./wardrobe";
+
 export type Visibility = "shared" | "private";
 export type Kind =
   | "memory"
@@ -10,6 +13,11 @@ export type Kind =
   | "question"
   | "quiz"
   | "mood"
+  | "thought"
+  | "meal-plan"
+  | "wardrobe-item"
+  | "wardrobe-share"
+  | "wardrobe-suggestion"
   | "comment"
   | "report";
 export interface Envelope {
@@ -28,9 +36,11 @@ export interface RecordMeta {
   createdAt: number;
   updatedAt: number;
   deletedAt?: number;
+  ownerOnly?: true;
 }
 export interface CipherRecord extends RecordMeta {
   envelope: Envelope;
+  photoRefs?: string[];
 }
 export interface Attachment {
   id: string;
@@ -69,6 +79,9 @@ export interface Payload {
   question?: string;
   options?: string[];
   history?: { at: number; title: string; body: string }[];
+  mealPlan?: MealPlan;
+  wardrobeSelection?: WardrobeSelection;
+  wardrobeSuggestion?: WardrobeSuggestion;
 }
 export interface Entry extends RecordMeta {
   data: Payload;
@@ -109,6 +122,7 @@ export interface Device {
   label: string;
   status: "active" | "revoked";
   createdAt: number;
+  sharedOnly?: true;
 }
 export interface KeyTransfer {
   id: string;
@@ -122,6 +136,8 @@ export interface KeyTransfer {
 }
 export interface Secrets {
   personalKey: string;
+  sharedOnly?: true;
+  localDraftKey?: string;
   encryptionSecret: string;
   signingSecret: string;
   deviceId: string;
@@ -145,6 +161,8 @@ export interface ApiReply<T = unknown> {
 }
 export interface Transport {
   call<T>(action: string, data?: Record<string, unknown>): Promise<T>;
+  webDeviceChallenges?: boolean;
+  webRecordSync?: boolean;
 }
 export interface StorageAdapter {
   get(key: string): string | null;

@@ -3,11 +3,16 @@ import {
   type CipherRecord,
   type Device,
   type Envelope,
+  type RecordMeta,
   type Space,
   type ApiReply,
 } from "../core/types";
-import { API_PROTOCOL, APP_VERSION } from "../core/protocol";
+import { API_PROTOCOL, APP_VERSION, RECORD_RECEIPT_TTL_MS } from "../core/protocol";
 import { MAX_PHOTO_CIPHERTEXT, PHOTO_DOWNLOAD_PART_SIZE, PHOTO_UPLOAD_PART_SIZE } from "../core/photos";
+import { verifyWebDeviceSignature, webRecoveryKeys, type WebDevice, type WebDeviceProof } from "../core/web-device";
+import { webProfiles, type WebProfile } from "../core/web-profile";
+import { markRecordChange, syncRecords, type WebSync } from "./web-sync";
+import { photoFileId } from "../core/photo-write";
 import {
   AI_TASKS,
   AI_TEXT_LIMIT,
@@ -19,11 +24,16 @@ import {
   readableSpace,
   CLOSING_GRACE_MS,
   TRANSFER_TTL_MS,
+  RECORD_RECEIPTS,
+  RECORD_TOMBSTONES,
+  PHOTO_DRAFT_TTL_MS,
 } from "./lifecycle";
 export interface Tx {
   get(collection: string, id: string): Promise<any>;
   put(collection: string, id: string, value: any): Promise<void>;
   remove(collection: string, id: string): Promise<void>;
+  putPhoto?(path: string, data: string): Promise<string>;
+  deletePhoto?(path: string): Promise<void>;
 }
 export interface Repository extends Tx {
   transaction<T>(fn: (tx: Tx) => Promise<T>): Promise<T>;
@@ -43,8 +53,28 @@ export interface ServerDeps {
   filePut?: (path: string, bytes: string) => Promise<string>;
   fileGet?: (fileId: string) => Promise<string>;
   fileDelete?: (fileId: string) => Promise<void>;
+  checkPhotoCapacity?: () => Promise<void>;
   runtime?: { mode: "cloud" | "local"; sdkVersion?: string };
   aiLimits?: { spaceDaily: number; globalDaily: number };
+  recordReceipts?: boolean;
+  managedPhotos?: boolean;
+  webDeviceChallenges?: boolean;
+  listVisibleRecords?: (
+    spaceId: string, privateOwner: string | null, after: string, offset: number,
+  ) => Promise<CipherRecord[]>;
+  webSync?: WebSync;
+}
+type RecordChange = RecordMeta | { id: string; visibility: RecordMeta["visibility"]; deleted: true; deletedFileIds?: string[] };
+type RecordReceipt = { action: string; digest: string; result: RecordChange; expiresAt: number };
+interface StoredPhoto {
+  id: string;
+  spaceId: string;
+  creatorId: string;
+  visibility: RecordMeta["visibility"];
+  storageId: string;
+  managed?: true;
+  recordId?: string | null;
+  attachUntil?: number;
 }
 function ensure(ok: unknown, code: string, msg: string): asserts ok {
   if (!ok) throw new AppError(code, msg);
@@ -117,8 +147,8 @@ async function authorizedDevice(
   deviceId: unknown,
   userId: string,
   spaceId: string,
-) {
-  const d = await tx.get("devices", id(deviceId));
+): Promise<Device> {
+  const d: Device | null = await tx.get("devices", id(deviceId));
   ensure(
     d && d.userId === userId && d.spaceId === spaceId && d.status === "active",
     "DEVICE_REVOKED",
@@ -126,21 +156,85 @@ async function authorizedDevice(
   );
   return d;
 }
+function requireDeviceVisibility(device: Device, visibility: unknown) {
+  ensure(!device.sharedOnly || visibility !== "private",
+    "PRIVATE_KEY_REQUIRED", "此设备仅用于共同空间，请从加密备份恢复私人记录");
+}
 export function createApi(deps: ServerDeps) {
   const { repo, now, hash } = deps;
+  async function verifyWebEnrollment(
+    tx: Tx, userId: string, device: WebDevice, previous: Device | null, proof: WebDeviceProof | undefined,
+  ) {
+    ensure(
+      proof && verifyWebDeviceSignature(device, proof, device.signingPublicKey, proof.signature),
+      "DEVICE_PROOF_INVALID", "设备签名未通过，请重新解锁",
+    );
+    if (device.sharedOnly || previous?.sharedOnly) return;
+    const keyId = hash(JSON.stringify([device.spaceId, userId]));
+    const pinned = await tx.get(webRecoveryKeys, keyId);
+    if (previous && pinned) return;
+    const validRecovery = typeof proof.recoveryPublicKey === "string" &&
+      verifyWebDeviceSignature(device, proof, proof.recoveryPublicKey, proof.recoverySignature);
+    if (previous && !validRecovery) return; // An existing full legacy device may still unlock.
+    const user = await tx.get("users", userId);
+    if (pinned) {
+      ensure(validRecovery && pinned.publicKey === proof.recoveryPublicKey,
+        "PRIVATE_RECOVERY_REQUIRED", "请使用该账号已有的个人恢复包");
+      return;
+    }
+    const source = typeof proof.sourceId === "string" ? await tx.get("devices", id(proof.sourceId)) : null;
+    const legacyRecovery = source?.spaceId === device.spaceId && source?.userId === userId &&
+      source?.status === "active" && !source?.sharedOnly &&
+      verifyWebDeviceSignature(device, proof, source.signingPublicKey, proof.sourceSignature);
+    ensure(validRecovery && (previous || user?.webInitialDevicePending === device.spaceId || legacyRecovery),
+      "PRIVATE_RECOVERY_REQUIRED", "请使用该账号已有的个人恢复包，或先在原设备解锁");
+    await tx.put(webRecoveryKeys, keyId, { id: keyId, spaceId: device.spaceId, publicKey: proof.recoveryPublicKey });
+    if (user?.webInitialDevicePending === device.spaceId)
+      await tx.put("users", userId, { ...user, webInitialDevicePending: null });
+  }
+  function receiptId(spaceId: string, userId: string, operationId: unknown) {
+    return hash(JSON.stringify([spaceId, userId, id(operationId)]));
+  }
+  function changeRecord(
+    spaceId: string, userId: string, deviceId: unknown, action: string,
+    operationId: unknown, payload: unknown,
+    apply: (tx: Tx, space: Space, device: Device) => Promise<RecordChange | CipherRecord>,
+  ) {
+    const key = deps.recordReceipts && operationId !== undefined ? receiptId(spaceId, userId, operationId) : null;
+    const digest = key ? hash(JSON.stringify([action, payload])) : "";
+    return repo.transaction(async (tx) => {
+      const space = await member(tx, spaceId, userId);
+      const device = await authorizedDevice(tx, deviceId, userId, spaceId);
+      if (key) {
+        const previous: RecordReceipt | null = await tx.get(RECORD_RECEIPTS, key);
+        if (previous) {
+          requireDeviceVisibility(device, previous.result.visibility);
+          ensure(previous.digest === digest, "OPERATION_REUSED", "该保存编号已有其它用途，请刷新后核对");
+          return previous.result;
+        }
+      }
+      const changed = await apply(tx, space, device);
+      if (deps.webSync) await markRecordChange(tx, spaceId, userId, changed);
+      if (key) {
+        const { envelope: _ciphertext, photoRefs: _refs, ...metadata } = changed as CipherRecord;
+        await tx.put(RECORD_RECEIPTS, key, {
+          id: key, spaceId, action, digest, result: metadata, expiresAt: now() + RECORD_RECEIPT_TTL_MS,
+        });
+      }
+      return changed;
+    });
+  }
   function photoReceipt(value: unknown) {
     const receipt = str(value, 64);
     ensure(/^[a-f0-9]{64}$/.test(receipt), "INVALID_REQUEST", "照片回执格式不正确");
     return receipt;
-  }
-  function photoFileId(spaceId: string, userId: string, receipt: string) {
-    return hash(JSON.stringify([spaceId, userId, receipt])).slice(0, 32);
   }
   function photoStageId(spaceId: string, userId: string, deviceId: string, receipt: string) {
     return "photo-stage-" + hash(JSON.stringify([spaceId, userId, deviceId, receipt])).slice(0, 32);
   }
   async function storePhoto(
     spaceId: string, userId: string, visibility: unknown, envelope: Envelope, receipt?: string,
+    managed?: { deviceId: unknown; ownerTrack: boolean },
   ) {
     ensure(visibility === "shared" || visibility === "private", "INVALID_REQUEST", "可见范围不正确");
     if (receipt !== undefined)
@@ -150,10 +244,53 @@ export function createApi(deps: ServerDeps) {
         "照片回执与密文不匹配",
       );
     ensure(deps.filePut, "NOT_CONFIGURED", "文件服务尚未配置");
-    const fileId = receipt === undefined ? deps.id() : photoFileId(spaceId, userId, receipt);
-    const storageId = await deps.filePut(`encrypted/${spaceId}/${fileId}.enc`, JSON.stringify(envelope));
-    await repo.put("encrypted_files", fileId, { id: fileId, spaceId, creatorId: userId, visibility, storageId });
+    const fileId = receipt === undefined ? deps.id() : photoFileId(spaceId, userId, receipt, hash);
+    const path = `encrypted/${spaceId}/${fileId}.enc`;
+    const bytes = JSON.stringify(envelope);
+    if (managed) {
+      await repo.transaction(async (tx) => {
+        await member(tx, spaceId, userId);
+        const device = await authorizedDevice(tx, managed.deviceId, userId, spaceId);
+        requireDeviceVisibility(device, visibility);
+        if (receipt && (await tx.get("encrypted_files", fileId))?.storageId) return;
+        await deps.checkPhotoCapacity?.();
+        ensure(tx.putPhoto, "NOT_CONFIGURED", "照片事务存储未配置");
+        const storageId = await tx.putPhoto(path, bytes);
+        await tx.put("encrypted_files", fileId, {
+          id: fileId, spaceId, creatorId: userId, visibility, storageId,
+          ...(managed.ownerTrack ? { managed: true, attachUntil: now() + PHOTO_DRAFT_TTL_MS } : {}),
+        });
+      });
+    } else {
+      await deps.checkPhotoCapacity?.();
+      const storageId = await deps.filePut(path, bytes);
+      await repo.put("encrypted_files", fileId, { id: fileId, spaceId, creatorId: userId, visibility, storageId });
+    }
     return { id: fileId };
+  }
+  function photoReferences(input: unknown): string[] | undefined {
+    if (!deps.managedPhotos || input === undefined) return undefined;
+    ensure(Array.isArray(input) && input.length <= 6, "INVALID_REQUEST", "照片引用必须为最多六个文件");
+    const references = input.map(id);
+    ensure(new Set(references).size === references.length, "INVALID_REQUEST", "照片引用重复");
+    return references;
+  }
+  async function replacePhotoReferences(tx: Tx, previous: CipherRecord | null, record: CipherRecord, userId: string) {
+    for (const fileId of record.photoRefs ?? []) {
+      const file: StoredPhoto | null = await tx.get("encrypted_files", fileId);
+      ensure(file?.storageId && file.spaceId === record.spaceId && file.visibility === record.visibility &&
+        (file.visibility === "shared" || file.creatorId === userId), "PHOTO_UNAVAILABLE", "有照片已失效或不可访问，请移除后重新添加");
+      if (!file.managed || file.recordId === record.id) continue;
+      ensure(!file.recordId && file.creatorId === userId && (file.attachUntil ?? 0) > now(),
+        "PHOTO_UNAVAILABLE", "有照片已过期或已归入另一条记录，请重新添加");
+      await tx.put("encrypted_files", fileId, { ...file, recordId: record.id, attachUntil: null });
+    }
+    for (const fileId of previous?.photoRefs ?? []) {
+      if (record.photoRefs?.includes(fileId)) continue;
+      const file: StoredPhoto | null = await tx.get("encrypted_files", fileId);
+      if (file?.managed && file.recordId === record.id)
+        await tx.put("encrypted_files", fileId, { ...file, recordId: null, attachUntil: now() + PHOTO_DRAFT_TTL_MS });
+    }
   }
   return async function handle(
     userId: string,
@@ -225,7 +362,9 @@ export function createApi(deps: ServerDeps) {
             createdAt: now(),
           };
           await tx.put("spaces", s.id, s);
-          await tx.put("users", userId, { ...u, spaceId: s.id });
+          await tx.put("users", userId, {
+            ...u, spaceId: s.id, ...(deps.webDeviceChallenges ? { webInitialDevicePending: s.id } : {}),
+          });
           return s;
         });
       } else if (action === "joinSpace") {
@@ -247,7 +386,9 @@ export function createApi(deps: ServerDeps) {
           ensure(s.members.length < 2, "SPACE_FULL", "这个空间已经住了两个人");
           s.members = [...s.members, userId];
           await tx.put("spaces", s.id, s);
-          await tx.put("users", userId, { ...u, spaceId: s.id });
+          await tx.put("users", userId, {
+            ...u, spaceId: s.id, ...(deps.webDeviceChallenges ? { webInitialDevicePending: s.id } : {}),
+          });
           await tx.put("invitations", tokenHash, {
             ...invitation,
             usedBy: userId,
@@ -283,15 +424,22 @@ export function createApi(deps: ServerDeps) {
             "KEY_CHANGED",
             "禁止替换已有设备公钥",
           );
+          const registration: WebDevice = {
+            id: dId, spaceId: input.spaceId, encryptionPublicKey, signingPublicKey,
+            label: str(input.label, 50), ...(input.sharedOnly === true ? { sharedOnly: true } : {}),
+          };
+          if (deps.webDeviceChallenges)
+            await verifyWebEnrollment(tx, userId, registration, previous, input.proof);
           const d: Device = {
             id: dId,
             spaceId: input.spaceId,
             userId,
             encryptionPublicKey,
             signingPublicKey,
-            label: str(input.label, 50),
+            label: registration.label,
             status: "active",
             createdAt: previous?.createdAt || now(),
+            ...((previous ? previous.sharedOnly : input.sharedOnly === true) ? { sharedOnly: true } : {}),
           };
           await tx.put("devices", dId, d);
           return d;
@@ -301,21 +449,43 @@ export function createApi(deps: ServerDeps) {
         const readOnly = [
           "getSpace",
           "listRecords",
+          "syncRecords",
           "listDevices",
           "fileGet",
           "fileUploadStatus",
+          "mutationStatus",
           "closeSpace",
           "cancelClose",
         ].includes(action);
         const space = await member(repo, spaceId, userId, true, now());
-        await authorizedDevice(repo, input.deviceId, userId, spaceId);
+        const device = await authorizedDevice(repo, input.deviceId, userId, spaceId);
         ensure(
           space.status === "active" || readOnly,
           "SPACE_CLOSING",
           "空间正在关闭冷静期，只能查看、导出或撤销关闭",
         );
-        if (action === "getSpace") result = space;
-        else if (action === "createInvitation") {
+        if (action === "getSpace") {
+          result = space;
+          if (deps.webDeviceChallenges) {
+            const profiles: WebProfile[] = [];
+            for (const memberId of space.members) {
+              const profile = await repo.get(webProfiles, hash(JSON.stringify([spaceId, memberId])));
+              if (profile) profiles.push({ userId: memberId, envelope: profile.envelope });
+            }
+            result = { ...space, profiles };
+          }
+        } else if (action === "setSpaceProfile" && deps.webDeviceChallenges) {
+          const envelope = validateEnvelope(input.envelope);
+          ensure(envelope.ciphertext.length <= 200, "INVALID_ENVELOPE", "昵称密文过长");
+          result = await repo.transaction(async (tx) => {
+            const current = await member(tx, spaceId, userId);
+            await authorizedDevice(tx, input.deviceId, userId, spaceId);
+            ensure(envelope.keyVersion === current.keyVersion, "KEY_VERSION_MISMATCH", "空间密钥已更新，请重新同步");
+            const profileId = hash(JSON.stringify([spaceId, userId]));
+            await tx.put(webProfiles, profileId, { id: profileId, spaceId, userId, envelope });
+            return null;
+          });
+        } else if (action === "createInvitation") {
           ensure(space.members.length < 2, "SPACE_FULL", "空间已经住了两个人");
           const token = deps.id() + deps.id();
           const tokenHash = hash(token);
@@ -484,6 +654,13 @@ export function createApi(deps: ServerDeps) {
             await tx.put("spaces", spaceId, updated);
             return updated;
           });
+        } else if (action === "syncRecords" && deps.webSync) {
+          const sync = deps.webSync;
+          result = await sync.read(async (tx) => {
+            await member(tx, spaceId, userId, true, now());
+            const current = await authorizedDevice(tx, input.deviceId, userId, spaceId);
+            return syncRecords(tx, sync, current, input.cursor, now());
+          });
         } else if (action === "listRecords") {
           const offset = Number(input.offset || 0);
           ensure(
@@ -491,18 +668,33 @@ export function createApi(deps: ServerDeps) {
             "INVALID_REQUEST",
             "无效分页",
           );
-          const rows: CipherRecord[] = await repo.list(
-            "encrypted_records",
-            { spaceId },
-            offset,
-            100,
-          );
-          result = {
-            records: rows.filter(
-              (r) => r.visibility === "shared" || r.creatorId === userId,
-            ),
-            nextOffset: rows.length === 100 ? offset + rows.length : null,
-          };
+          if (deps.listVisibleRecords) {
+            const usesCursor = input.after !== undefined;
+            const after = usesCursor && input.after !== "" ? id(input.after) : "";
+            ensure(!usesCursor || offset === 0, "INVALID_REQUEST", "不能同时指定游标和偏移量");
+            const visible = await deps.listVisibleRecords(spaceId, device.sharedOnly ? null : userId, after, offset);
+            const records = visible.slice(0, 100);
+            result = usesCursor ? { records, nextAfter: visible.length > 100 ? records.at(-1)!.id : null }
+              : { records, nextOffset: visible.length > 100 ? offset + records.length : null };
+          } else {
+            const rows: CipherRecord[] = await repo.list(
+              "encrypted_records",
+              { spaceId },
+              offset,
+              100,
+            );
+            result = {
+              records: rows.filter(
+                (r) => r.visibility === "shared" || (!device.sharedOnly && r.creatorId === userId),
+              ),
+              nextOffset: rows.length === 100 ? offset + rows.length : null,
+            };
+          }
+        } else if (action === "mutationStatus") {
+          ensure(deps.recordReceipts, "NOT_CONFIGURED", "写入回执未启用");
+          const previous: RecordReceipt | null = await repo.get(RECORD_RECEIPTS, receiptId(spaceId, userId, input.operationId));
+          if (previous) requireDeviceVisibility(device, previous.result.visibility);
+          result = previous ? { action: previous.action, result: previous.result } : null;
         } else if (action === "putRecord") {
           const incoming = input.record;
           ensure(
@@ -512,19 +704,17 @@ export function createApi(deps: ServerDeps) {
           );
           const recordId = id(incoming.id);
           const envelope = validateEnvelope(incoming.envelope);
+          const refs = photoReferences(input.photoRefs);
+          const ownerOnly = incoming.ownerOnly === true;
           ensure(
-            envelope.keyVersion === space.keyVersion,
-            "KEY_VERSION_MISMATCH",
-            "请先刷新空间密钥",
-          );
-          ensure(
-            ["shared", "private"].includes(incoming.visibility),
+            ["shared", "private"].includes(incoming.visibility) && (!ownerOnly || incoming.visibility === "shared"),
             "INVALID_REQUEST",
             "可见范围不正确",
           );
-          result = await repo.transaction(async (tx) => {
-            const currentSpace = await member(tx, spaceId, userId);
-            await authorizedDevice(tx, input.deviceId, userId, spaceId);
+          result = await changeRecord(spaceId, userId, input.deviceId, action, input.operationId,
+            [recordId, incoming.creatorId, incoming.visibility, envelope, input.expectedRevision, refs,
+              ...(ownerOnly ? [true] : [])], async (tx, currentSpace, currentDevice) => {
+            requireDeviceVisibility(currentDevice, incoming.visibility);
             ensure(
               envelope.keyVersion === currentSpace.keyVersion,
               "KEY_VERSION_MISMATCH",
@@ -534,16 +724,20 @@ export function createApi(deps: ServerDeps) {
               "encrypted_records",
               recordId,
             );
+            if (!current && deps.recordReceipts) {
+              const tombstone = await tx.get(RECORD_TOMBSTONES, recordId);
+              ensure(!tombstone, "RECORD_PURGED", "这条记录已永久删除，不能重复提交原保存");
+            }
             ensure(
               !current ||
                 (current.spaceId === spaceId &&
-                  (current.visibility === "shared" ||
+                  ((current.visibility === "shared" && !current.ownerOnly) ||
                     current.creatorId === userId)),
               "FORBIDDEN",
               "无法编辑这条记录",
             );
             ensure(
-              !current || current.visibility === incoming.visibility,
+              !current || (current.visibility === incoming.visibility && !!current.ownerOnly === ownerOnly),
               "INVALID_REQUEST",
               "请另存一条记录以改变可见范围",
             );
@@ -566,26 +760,30 @@ export function createApi(deps: ServerDeps) {
               revision: (current?.revision || 0) + 1,
               createdAt: current?.createdAt || now(),
               updatedAt: now(),
+              ...(ownerOnly ? { ownerOnly: true } : {}),
               ...(current?.deletedAt ? { deletedAt: current.deletedAt } : {}),
+              ...(refs !== undefined ? { photoRefs: refs } : current?.photoRefs ? { photoRefs: current.photoRefs } : {}),
             };
+            if (refs !== undefined) await replacePhotoReferences(tx, current, record, userId);
             await tx.put("encrypted_records", recordId, record);
             return record;
           });
         } else if (action === "deleteRecord" || action === "restoreRecord") {
-          result = await repo.transaction(async (tx) => {
-            await member(tx, spaceId, userId);
-            await authorizedDevice(tx, input.deviceId, userId, spaceId);
+          const recordId = id(input.recordId);
+          result = await changeRecord(spaceId, userId, input.deviceId, action, input.operationId,
+            [recordId, input.expectedRevision], async (tx, _currentSpace, currentDevice) => {
             const record: CipherRecord = await tx.get(
               "encrypted_records",
-              id(input.recordId),
+              recordId,
             );
             ensure(
               record &&
                 record.spaceId === spaceId &&
-                (record.visibility === "shared" || record.creatorId === userId),
+                ((record.visibility === "shared" && !record.ownerOnly) || record.creatorId === userId),
               "FORBIDDEN",
               "无法操作这条记录",
             );
+            requireDeviceVisibility(currentDevice, record.visibility);
             ensure(
               record.revision === input.expectedRevision,
               "REVISION_CONFLICT",
@@ -601,12 +799,12 @@ export function createApi(deps: ServerDeps) {
             return updated;
           });
         } else if (action === "purgeRecord") {
-          result = await repo.transaction(async (tx) => {
-            await member(tx, spaceId, userId);
-            await authorizedDevice(tx, input.deviceId, userId, spaceId);
+          const recordId = id(input.recordId);
+          result = await changeRecord(spaceId, userId, input.deviceId, action, input.operationId,
+            [recordId, input.expectedRevision], async (tx, _currentSpace, currentDevice) => {
             const record: CipherRecord = await tx.get(
               "encrypted_records",
-              id(input.recordId),
+              recordId,
             );
             ensure(
               record &&
@@ -616,18 +814,34 @@ export function createApi(deps: ServerDeps) {
               "FORBIDDEN",
               "只能永久删除自己已放入回收站的记录",
             );
+            requireDeviceVisibility(currentDevice, record.visibility);
             ensure(
               record.revision === input.expectedRevision,
               "REVISION_CONFLICT",
               "记录已更新，请刷新",
             );
+            const deletedFileIds: string[] = [];
+            if (deps.managedPhotos) {
+              ensure(tx.deletePhoto, "NOT_CONFIGURED", "照片事务存储未配置");
+              for (const fileId of record.photoRefs ?? []) {
+                const file: StoredPhoto | null = await tx.get("encrypted_files", fileId);
+                if (!file?.managed || file.recordId !== record.id) continue;
+                await tx.deletePhoto(file.storageId);
+                await tx.remove("encrypted_files", fileId);
+                deletedFileIds.push(fileId);
+              }
+            }
             await tx.remove("encrypted_records", record.id);
-            return { deleted: true };
+            if (deps.recordReceipts)
+              await tx.put(RECORD_TOMBSTONES, record.id, { id: record.id, spaceId, purgedAt: now() });
+            return { id: record.id, visibility: record.visibility, deleted: true, deletedFileIds };
           });
         } else if (action === "filePut") {
+          requireDeviceVisibility(device, input.visibility);
           const envelope = validateEnvelope(input.envelope);
           const receipt = input.receipt === undefined ? undefined : photoReceipt(input.receipt);
-          result = await storePhoto(spaceId, userId, input.visibility, envelope, receipt);
+          result = await storePhoto(spaceId, userId, input.visibility, envelope, receipt,
+            deps.managedPhotos ? { deviceId: input.deviceId, ownerTrack: input.managed === true } : undefined);
         } else if (action === "fileUploadPart") {
           const receipt = photoReceipt(input.receipt);
           const index = input.index;
@@ -651,6 +865,7 @@ export function createApi(deps: ServerDeps) {
               return { received: true };
             }
             ensure(offset === ciphertext.length, "PHOTO_PART_MISSING", "照片分段缺失，请重新添加");
+            await deps.checkPhotoCapacity?.();
             await tx.put("encrypted_files", stageId, {
               id: stageId, spaceId, receipt, staging: true,
               ciphertext: ciphertext + chunk, expiresAt: now() + 3600000,
@@ -658,28 +873,32 @@ export function createApi(deps: ServerDeps) {
             return { received: true };
           });
         } else if (action === "fileUploadCommit") {
+          requireDeviceVisibility(device, input.visibility);
           const receipt = photoReceipt(input.receipt);
           const stageId = photoStageId(spaceId, userId, input.deviceId, receipt);
-          const fileId = photoFileId(spaceId, userId, receipt);
+          const fileId = photoFileId(spaceId, userId, receipt, hash);
           const stage = await repo.get("encrypted_files", stageId);
           const file = await repo.get("encrypted_files", fileId);
           if (file?.spaceId === spaceId && file.creatorId === userId && file.storageId) {
+            requireDeviceVisibility(device, file.visibility);
             result = { id: fileId };
           } else {
             ensure(stage?.receipt === receipt && stage.expiresAt > now(),
               "PHOTO_PART_MISSING", "照片分段缺失，请重新添加");
             const envelope = validateEnvelope({ ...input.header, ciphertext: stage.ciphertext });
-            result = await storePhoto(spaceId, userId, input.visibility, envelope, receipt);
+            result = await storePhoto(spaceId, userId, input.visibility, envelope, receipt,
+              deps.managedPhotos ? { deviceId: input.deviceId, ownerTrack: input.managed === true } : undefined);
             await repo.transaction(async (tx) => {
               if ((await tx.get("encrypted_files", stageId))?.receipt === receipt)
                 await tx.remove("encrypted_files", stageId);
             }).catch(() => {}); // The staged copy also expires if cleanup is interrupted.
           }
         } else if (action === "fileUploadStatus") {
-          const fileId = photoFileId(spaceId, userId, photoReceipt(input.receipt));
+          const fileId = photoFileId(spaceId, userId, photoReceipt(input.receipt), hash);
           const file = await repo.get("encrypted_files", fileId);
           result = {
-            id: file?.spaceId === spaceId && file.creatorId === userId && file.storageId ? fileId : null,
+            id: file?.spaceId === spaceId && file.creatorId === userId && file.storageId &&
+              (!device.sharedOnly || file.visibility === "shared") ? fileId : null,
           };
         } else if (action === "fileGet" || action === "fileDelete") {
           const file = await repo.get("encrypted_files", id(input.fileId));
@@ -691,7 +910,10 @@ export function createApi(deps: ServerDeps) {
             "FORBIDDEN",
             "无法访问此文件",
           );
+          requireDeviceVisibility(device, file.visibility);
           if (action === "fileGet") {
+            ensure(!file.managed || file.recordId || (file.creatorId === userId && file.attachUntil > now()),
+              "FORBIDDEN", "照片尚未加入记录或已过期");
             ensure(deps.fileGet, "NOT_CONFIGURED", "文件服务尚未配置");
             const part = input.part;
             ensure(part === undefined || (Number.isSafeInteger(part) && part >= 0 &&
@@ -710,8 +932,21 @@ export function createApi(deps: ServerDeps) {
               "FORBIDDEN",
               "只能删除自己上传的文件",
             );
-            await deps.fileDelete?.(file.storageId);
-            await repo.remove("encrypted_files", file.id);
+            if (deps.managedPhotos) {
+              await repo.transaction(async (tx) => {
+                await member(tx, spaceId, userId);
+                await authorizedDevice(tx, input.deviceId, userId, spaceId);
+                const current: StoredPhoto | null = await tx.get("encrypted_files", file.id);
+                if (!current) return;
+                ensure(!current.managed || !current.recordId, "PHOTO_LINKED", "请从记录中移除照片后再删除");
+                ensure(tx.deletePhoto, "NOT_CONFIGURED", "照片事务存储未配置");
+                await tx.deletePhoto(current.storageId);
+                await tx.remove("encrypted_files", file.id);
+              });
+            } else {
+              await deps.fileDelete?.(file.storageId);
+              await repo.remove("encrypted_files", file.id);
+            }
             result = { deleted: true };
           }
         } else if (action === "aiGenerate") {

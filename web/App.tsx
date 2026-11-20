@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ReactNode,
@@ -49,11 +50,23 @@ import {
 import { UsService } from "../src/core/service";
 import { prepareBrowserPhoto } from "./photos";
 import { QuestionRoom } from "./QuestionRoom";
+import { HomeCompanionship } from "./HomeCompanionship";
+import { MealDecision } from "./MealDecision";
+import { Wardrobe } from "./Wardrobe";
+import { MemoryGalaxy, type GalaxyView } from "./MemoryGalaxy";
+import { MemoryPages } from "./MemoryPages";
+import { MemoryBook, newBookDraft } from "./MemoryBook";
+import { ExternalMap } from "./ExternalMap";
+import { OutboxPanel } from "./OutboxPanel";
+import type { ArchiveScope } from "./archive";
+import { pairingRoute, parseWebRoute, recordRoute, webRoute, type WebPage, type WebRoute } from "./routes";
 import {
+  allowsUnlockMemory,
   deleteExpiredUnlock,
   forgetUnlock,
   rememberUnlock,
   restoreUnlock,
+  setUnlockMemory,
   unlockDuration,
   unlockGeneration,
   unlockGenerationKey,
@@ -91,7 +104,7 @@ const tabs = [
   { id: "interaction", label: "一起玩耍", sub: "互动", icon: Gamepad2 },
   { id: "plans", label: "未来清单", sub: "计划", icon: CalendarDays },
   { id: "profile", label: "我的空间", sub: "我的", icon: UserRound },
-];
+] as const;
 const firstAvatar = { name: SPACE_MEMBER_NAMES[0], color: "a" };
 const secondAvatar = { name: SPACE_MEMBER_NAMES[1], color: "b" };
 const moodOptions = [
@@ -136,7 +149,7 @@ function Photo({
     let alive = true;
     if (!photo.sample)
       service
-        .readPhoto(photo, visibility)
+        .readPhoto(photo, visibility, () => alive)
         .then((bytes) => {
           if (alive) setSrc(`data:${photo.mime};base64,${bytes}`);
         })
@@ -228,6 +241,12 @@ function Modal({
     </div>
   );
 }
+function currentWebRoute() {
+  const next = parseWebRoute(window.location.pathname) ?? webRoute("home");
+  const parent = window.history.state?.usRecordBackground;
+  const background = next.record && typeof parent === "string" ? parseWebRoute(parent) : undefined;
+  return next.record && background && !background.record ? recordRoute(next.record, background) : next;
+}
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="field">
@@ -237,29 +256,67 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-export function App({ hosted }: { hosted?: { account: string; service: UsService; owner: boolean; signOut: () => Promise<void> } }) {
+export function App({ hosted }: { hosted?: { account: string; service: UsService; owner: boolean; signOut: () => Promise<void>; installation?: ReactNode } }) {
   const hostedService = hosted?.service;
   const account = hosted?.account;
-  const [myAvatar, partnerAvatar] = hosted && !hosted.owner
-    ? [secondAvatar, firstAvatar]
-    : [firstAvatar, secondAvatar];
   const [service, setService] = useState<UsService | null>(hosted?.service ?? null);
   const [mode, setMode] = useState<"demo" | "personal">(hosted ? "personal" : "demo");
   const [revision, setRevision] = useState(0);
-  const [page, setPage] = useState("home");
-  const [section, setSection] = useState("timeline");
-  const [modal, setModal] = useState("");
-  const [editing, setEditing] = useState<Entry | undefined>();
-  const [detail, setDetail] = useState<Entry | null>(null);
+  const [route, setRoute] = useState(() =>
+    hosted && typeof window !== "undefined" && window.location && window.history ? currentWebRoute() : webRoute("home"),
+  );
+  const { page, section } = route;
+  const [activeModal, setModal] = useState("");
+  const [authorization, setAuthorization] = useState<{
+    action: string; title: string; execute: () => Promise<unknown>; success: string;
+  } | null>(null);
+  const [websitePassword, setWebsitePassword] = useState("");
+  const authorizationAttempt = useRef(0);
+  const [activeEditing, setEditing] = useState<Entry | undefined>();
+  const [activeDetail, setDetail] = useState<Entry | null>(null);
+  const editorDirty = useRef(false);
+  const target = route.record;
+  const routedEntry = target && target.kind !== "new" ? service?.active.find((entry) =>
+    entry.id === target.id && entry.data.kind === "memory") : undefined;
+  const recordModal = target?.kind === "detail" ? (routedEntry ? "detail" : "")
+    : target?.kind === "new" || routedEntry ? "edit:memory" : "";
+  const settingsModal = hostedService && page === "profile" && (
+    section === "devices" ? "security" : section === "backup"
+      ? (service?.hasPrivateAccess ? "verify-backup" : "restore") : ""
+  );
+  const modal = authorization ? "authorize" : activeModal || recordModal || settingsModal || "";
+  const editing = activeModal ? activeEditing : routedEntry;
+  const detail = activeModal ? activeDetail : routedEntry ?? null;
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [password, setPassword] = useState("");
+  const [nickname, setNickname] = useState("");
+  const [showCompanionship, setShowCompanionship] = useState(() =>
+    !!account && localStorage.getItem(`us.web.${account}.companionship`) === "true",
+  );
+  const [showMealPlan, setShowMealPlan] = useState(() =>
+    !!account && localStorage.getItem(`us.web.${account}.mealPlan`) === "true",
+  );
+  const [showWardrobe, setShowWardrobe] = useState(() =>
+    !!account && localStorage.getItem(`us.web.${account}.wardrobe`) === "true",
+  );
+  const [showGalaxy, setShowGalaxy] = useState(() =>
+    !!account && localStorage.getItem(`us.web.${account}.memoryGalaxy`) === "true",
+  );
+  const [galaxy, setGalaxy] = useState<GalaxyView>({ zoom: 1, year: "", page: 0 });
+  const galaxyScroll = useRef({ left: 0, top: 0 });
+  const [bookDraft, setBookDraft] = useState(() => newBookDraft(today()));
   const [spaceName, setSpaceName] = useState("我们的小世界");
   const [startDate, setStartDate] = useState(today());
-  const [welcomeMode, setWelcomeMode] = useState(
+  const [baseWelcomeMode, setWelcomeMode] = useState(
     hostedService ? (hostedService.secrets ? "unlock" : hostedService.vault ? "resume" : "checking") : "welcome",
   );
+  const pairingForm = hosted && route.pairing === (hosted.owner ? "create" : "join") ? route.pairing : undefined;
+  const welcomeMode = baseWelcomeMode === "welcome" && pairingForm ? pairingForm : baseWelcomeMode;
   const [unlockExpiresAt, setUnlockExpiresAt] = useState(0);
+  const [rememberUnlockOnDevice, setRememberUnlockOnDevice] = useState(() =>
+    account ? allowsUnlockMemory(account) : false,
+  );
   const [joinCode, setJoinCode] = useState("");
   const [verificationCode, setVerificationCode] = useState("");
   const [recovery, setRecovery] = useState("");
@@ -296,20 +353,38 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
   const [invitation, setInvitation] = useState("");
   const [comment, setComment] = useState("");
   const [dark, setDark] = useState(localStorage.getItem("us.theme") === "dark");
-  const [mapConsent, setMapConsent] = useState(false);
+  const [showExternalMap, setShowExternalMap] = useState(() =>
+    !!account && localStorage.getItem(`us.web.${account}.externalMap`) === "true",
+  );
+  const [showAiExperiment, setShowAiExperiment] = useState(() =>
+    !!account && localStorage.getItem(`us.web.${account}.aiExperiment`) === "true",
+  );
   const close = useCallback(() => {
+    authorizationAttempt.current++;
     setModal("");
+    setAuthorization(null);
+    setWebsitePassword("");
     setDetail(null);
     setAiPreview(false);
     setAiConsent(false);
     setRecovery("");
     setBackupPassword("");
     setVerificationCode("");
-  }, []);
+    setNickname("");
+    if (settingsModal && modal === settingsModal && activeModal === "") {
+      const next = webRoute("profile");
+      if (window.history.state?.usSettingsBackground) window.history.back();
+      else {
+        window.history.replaceState(null, "", next.pathname);
+        setRoute(next);
+      }
+    }
+  }, [settingsModal, modal, activeModal]);
   const unlocked = !!service?.ready;
   const sessionOpen = !!service?.secrets;
   useEffect(() => {
     if (!unlocked) {
+      setBookDraft(newBookDraft(today()));
       setRecovery("");
       setBackupPassword("");
       setModal((current) =>
@@ -325,11 +400,22 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
     setWelcomeMode(hostedService?.vault ? "unlock" : "checking");
     close();
   }, [hostedService, close]);
+  const handleRevokedDevice = useCallback((error: unknown) => {
+    if (!account || !(error instanceof AppError) || !["DEVICE_REVOKED", "DEVICE_UNBOUND"].includes(error.code)) return false;
+    void forgetUnlock(account).catch(() => {});
+    lockHostedSpace();
+    notify(error.code === "DEVICE_REVOKED" ? "这台设备的空间访问已被撤销。可使用自己的加密备份重新登记。"
+      : "当前网站会话已切换设备。请重新解锁以验证这台设备。");
+    return true;
+  }, [account, lockHostedSpace, notify]);
   useEffect(() => {
     if (!account || !hostedService || welcomeMode !== "resume") return;
     let canceled = false;
     void (async () => {
-      const saved = await restoreUnlock(account).catch(() => null);
+      const saved = await restoreUnlock(account).catch(() => {
+        if (!canceled) notify("浏览器无法读取上次解锁状态，请输入本机口令");
+        return null;
+      });
       try {
         if (!saved || canceled) return;
         await hostedService.unlockWithKey(saved.access);
@@ -338,15 +424,16 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
           return;
         }
         setUnlockExpiresAt(saved.expiresAt);
-      } catch {
+      } catch (error) {
         hostedService.lock();
+        handleRevokedDevice(error);
       } finally {
         saved?.access.key.fill(0);
         if (!canceled) setWelcomeMode("unlock");
       }
     })();
     return () => { canceled = true; };
-  }, [account, hostedService, welcomeMode]);
+  }, [account, hostedService, welcomeMode, handleRevokedDevice, notify]);
   useEffect(() => {
     if (!account) return;
     const onStorage = (event: StorageEvent) => {
@@ -378,7 +465,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
     const access = hostedService.getUnlockKey();
     if (access) {
       try {
-        await rememberUnlock(account, access, generation, expiresAt);
+        if (rememberUnlockOnDevice) await rememberUnlock(account, access, generation, expiresAt);
       } catch {
         notify("浏览器暂时无法记住解锁状态，刷新后需重新输入口令");
       } finally {
@@ -389,8 +476,15 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
       lockHostedSpace();
       throw new AppError("LOCKED", "此空间已锁定，请重新解锁");
     }
-    setUnlockExpiresAt(expiresAt);
+    setUnlockExpiresAt(rememberUnlockOnDevice ? expiresAt : 0);
     return value;
+  }
+  function changeUnlockMemory(remember: boolean) {
+    if (!account) return;
+    setRememberUnlockOnDevice(remember);
+    void setUnlockMemory(account, remember).catch(() => {
+      notify("浏览器未能保存此选项，请在用完后主动锁定空间");
+    });
   }
   const update = () => setRevision((v) => v + 1);
   const run = async <T,>(
@@ -404,12 +498,35 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
       if (success) notify(success);
       return value;
     } catch (e) {
-      notify(e instanceof Error ? e.message : "暂时没有成功，请再试一次");
+      if (!handleRevokedDevice(e)) notify(e instanceof Error ? e.message : "暂时没有成功，请再试一次");
       return undefined;
     } finally {
       setBusy(false);
     }
   };
+  useEffect(() => {
+    if (modal !== "security" || !unlocked || !service) return;
+    let active = true;
+    setDevices([]);
+    void service.devices().then((registered) => {
+      if (active) setDevices(registered);
+    }).catch((error) => {
+      if (active && !handleRevokedDevice(error)) notify(error instanceof Error ? error.message : "设备列表暂时不可用");
+    });
+    return () => { active = false; };
+  }, [modal, unlocked, service, handleRevokedDevice, notify]);
+  const runSensitive = (
+    action: string, title: string, execute: () => Promise<unknown>, success: string,
+  ) => {
+    if (!hosted) return void run(execute, success);
+    setWebsitePassword("");
+    setAuthorization({ action, title, execute, success });
+  };
+  const cancelAuthorization = useCallback(() => {
+    authorizationAttempt.current++;
+    setAuthorization(null);
+    setWebsitePassword("");
+  }, []);
   useEffect(() => {
     if (!toast) return;
     const id = setTimeout(() => setToast(""), 4500);
@@ -476,14 +593,33 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
   }, [notify, hosted]);
   useEffect(() => {
     if (!service?.ready) return;
-    const id = setInterval(() => {
-      service
-        .refresh()
-        .then(update)
-        .catch(() => {});
-    }, 30000);
-    return () => clearInterval(id);
-  }, [service, unlocked]);
+    let stopped = false;
+    let pending = false;
+    const refresh = async (event?: Event) => {
+      if (pending || (hostedService && document.hidden) || !service.ready) return;
+      pending = true;
+      try {
+        await service.refresh();
+        if (event?.type === "online" && service.supportsOutbox) await service.flushOutbox();
+      } catch (error) {
+        handleRevokedDevice(error);
+      } finally {
+        pending = false;
+        if (!stopped) setRevision((value) => value + 1);
+      }
+    };
+    const id = window.setInterval(() => void refresh(), 30000);
+    if (hostedService) {
+      window.addEventListener("online", refresh);
+      document.addEventListener("visibilitychange", refresh);
+    }
+    return () => {
+      stopped = true;
+      clearInterval(id);
+      window.removeEventListener("online", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [service, hostedService, unlocked, handleRevokedDevice]);
   useEffect(() => {
     if (hostedService || !service || !sessionOpen) return;
     let hiddenAt = 0;
@@ -541,10 +677,21 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
         setRecovery(key);
         setModal("recovery");
       }
+      if (hosted && welcomeMode === "join") {
+        const next = pairingRoute("keys");
+        window.history.replaceState(window.history.state, "", next.pathname);
+        setRoute(next);
+      }
       setPassword("");
     });
   }
   const entries = service?.active || [];
+  const spaceMembers = service?.space?.members;
+  const memberAvatars = [firstAvatar, secondAvatar].map((avatar, index) => ({
+    ...avatar, name: (spaceMembers?.[index] && service?.displayNames.get(spaceMembers[index])) || avatar.name,
+  }));
+  const [myAvatar, partnerAvatar] = hosted && !hosted.owner
+    ? [memberAvatars[1], memberAvatars[0]] : memberAvatars;
   const relationship = entries.find(
     (e) => e.data.kind === "anniversary" && e.data.category === "relationship",
   );
@@ -572,9 +719,113 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
       ? `${day.slice(0, 4)}-01-01`
       : `${day.slice(0, 7)}-01`;
   const stats = report(entries, reportFrom, day);
-  function go(nextPage: string, nextSection?: string) {
-    setPage(nextPage);
-    if (nextSection) setSection(nextSection);
+  useEffect(() => {
+    if (!hostedService) return;
+    const restoreRoute = () => {
+      const next = currentWebRoute();
+      if (next.pathname === route.pathname) return;
+      if (editorDirty.current && !window.confirm("还有未保存的编辑，确定离开吗？")) {
+        window.history.pushState(route.record ? { usRecordBackground: next.pathname } : null, "", route.pathname);
+        return;
+      }
+      editorDirty.current = false;
+      setModal("");
+      if (route.pairing) {
+        setPassword("");
+        setJoinCode("");
+      }
+      setRoute(next);
+    };
+    const guardReload = (event: BeforeUnloadEvent) => {
+      if (!editorDirty.current) return;
+      event.preventDefault();
+      event.returnValue = true;
+    };
+    window.addEventListener("popstate", restoreRoute);
+    window.addEventListener("beforeunload", guardReload);
+    return () => {
+      window.removeEventListener("popstate", restoreRoute);
+      window.removeEventListener("beforeunload", guardReload);
+    };
+  }, [hostedService, route]);
+  const closePairing = useCallback(() => {
+    const previous = window.history.state?.usPairingBackground;
+    const next = typeof previous === "string" ? parseWebRoute(previous) : undefined;
+    const destination = next && !next.pairing ? next : webRoute("home");
+    window.history.replaceState(null, "", destination.pathname);
+    setPassword("");
+    setJoinCode("");
+    setRoute(destination);
+  }, []);
+  useEffect(() => {
+    if (!hosted || !route.pairing) return;
+    const setupUnavailable = ["device", "restore-only"].includes(baseWelcomeMode);
+    const wrongAccount = route.pairing !== "keys" && !pairingForm;
+    const noPairedDevice = route.pairing === "keys" && baseWelcomeMode === "welcome" && !sessionOpen;
+    if (unlocked || setupUnavailable || wrongAccount || noPairedDevice) closePairing();
+  }, [hosted, route.pairing, baseWelcomeMode, pairingForm, unlocked, sessionOpen, closePairing]);
+  useEffect(() => {
+    if (!hostedService || !unlocked || !service?.lastSyncedAt || !target || target.kind === "new" || routedEntry) return;
+    const next = webRoute("memories");
+    window.history.replaceState(null, "", next.pathname);
+    setRoute(next);
+    notify("这条回忆已移除或当前账号无法访问。");
+  }, [hostedService, unlocked, service?.lastSyncedAt, target, routedEntry, notify]);
+  const closeRecordRoute = useCallback(() => {
+    const background = window.history.state?.usRecordBackground;
+    if (background) window.history.back();
+    else {
+      const next = webRoute("memories");
+      window.history.replaceState(null, "", next.pathname);
+      setRoute(next);
+    }
+  }, []);
+  const finishEditor = () => {
+    editorDirty.current = false;
+    if (target && !activeModal) closeRecordRoute();
+    close();
+  };
+  const requestEditorClose = useCallback(() => {
+    if (editorDirty.current && !window.confirm("还有未保存的编辑，确定离开吗？")) return;
+    editorDirty.current = false;
+    if (target && !activeModal) closeRecordRoute();
+    close();
+  }, [target, activeModal, closeRecordRoute, close]);
+  const closeDetail = useCallback(() => {
+    if (target && !activeModal) closeRecordRoute();
+    close();
+  }, [target, activeModal, closeRecordRoute, close]);
+  function openRecordRoute(next: WebRoute) {
+    const state = { usRecordBackground: webRoute(page, section).pathname };
+    if (route.record) window.history.replaceState(window.history.state, "", next.pathname);
+    else window.history.pushState(state, "", next.pathname);
+    setModal("");
+    setRoute(next);
+  }
+  function openSettingsPane(pane: "devices" | "backup") {
+    if (!hostedService) {
+      go("profile");
+      setModal(pane === "devices" ? "security" : "verify-backup");
+      return;
+    }
+    const next = webRoute("profile", pane);
+    if (route.pathname !== next.pathname)
+      window.history.pushState({ usSettingsBackground: true }, "", next.pathname);
+    setModal("");
+    setRoute(next);
+  }
+  function navigate(nextPage: WebPage, nextSection?: string) {
+    const next = webRoute(nextPage, nextSection);
+    if (hostedService && window.location.pathname !== next.pathname) {
+      window.history.pushState(null, "", next.pathname);
+    }
+    setRoute(next);
+  }
+  function setSection(nextSection: string) {
+    navigate(page, nextSection);
+  }
+  function go(nextPage: WebPage, nextSection?: string) {
+    navigate(nextPage, nextSection);
     setSearch("");
     setFilter("全部");
     setAiConsent(false);
@@ -582,10 +833,18 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
     window.scrollTo(0, 0);
   }
   function edit(kind: string, entry?: Entry) {
+    if (hostedService && kind === "memory" && (!entry || /^[a-f0-9]{32,64}$/.test(entry.id))) {
+      openRecordRoute(recordRoute(entry ? { kind: "edit", id: entry.id } : { kind: "new" }, webRoute(page, section)));
+      return;
+    }
     setEditing(entry);
     setModal(`edit:${kind}`);
   }
   const viewEntry = (e: Entry) => {
+    if (hostedService && e.data.kind === "memory" && /^[a-f0-9]{32,64}$/.test(e.id)) {
+      openRecordRoute(recordRoute({ kind: "detail", id: e.id }, webRoute(page, section)));
+      return;
+    }
     setDetail(e);
     setModal("detail");
   };
@@ -687,7 +946,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
               : welcomeMode === "resume"
                 ? "正在恢复本机解锁状态…"
               : welcomeMode === "device"
-                ? "在此浏览器设置本机解锁口令，登记设备后即可获取安全码。已有加密备份时，可用备份恢复原有密钥和私人记录。"
+                ? "使用自己的加密备份可恢复共同和私人记录。也可以先登记这台设备，仅加入共同空间。"
               : welcomeMode === "checking"
                 ? "正在查询账号的空间状态…"
               : welcomeMode === "check-error"
@@ -719,7 +978,11 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
             <button className="primary full" onClick={() => setModal("restore")}>使用备份恢复</button>
           ) : welcomeMode === "welcome" && hosted ? (
             <>
-              <button className="primary full" onClick={() => setWelcomeMode(hosted.owner ? "create" : "join")}>
+              <button className="primary full" onClick={() => {
+                const next = pairingRoute(hosted.owner ? "create" : "join");
+                window.history.pushState({ usPairingBackground: route.pathname }, "", next.pathname);
+                setRoute(next);
+              }}>
                 {hosted.owner ? "创建双人空间" : "输入邀请码加入"}
               </button>
               <button className="secondary full" onClick={() => setModal("restore")}>使用备份恢复</button>
@@ -812,19 +1075,27 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                   required
                 />
               </Field>
+              {account && <label className="unlock-memory-option">
+                <input type="checkbox" checked={rememberUnlockOnDevice}
+                  onChange={(event) => changeUnlockMemory(event.target.checked)} disabled={busy} />
+                <span>在此浏览器记住解锁 24 小时</span>
+              </label>}
               <button className="primary full" disabled={busy}>
                 {busy
                   ? "正在打开…"
                   : welcomeMode === "unlock"
                     ? "打开小世界"
                     : welcomeMode === "device"
-                      ? "登记设备并获取安全码"
+                      ? "登记设备，仅加入共同空间"
                       : welcomeMode === "join" ? "加入双人空间" : "创建我们的空间"}
               </button>
               {(!hosted || ["create", "join"].includes(welcomeMode)) && <button
                 className="text-button full"
                 type="button"
-                onClick={() => setWelcomeMode(hosted ? "checking" : "welcome")}
+                onClick={() => {
+                  if (route.pairing) closePairing();
+                  else setWelcomeMode(hosted ? "checking" : "welcome");
+                }}
               >
                 返回
               </button>}
@@ -915,7 +1186,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
               await service.receive(verificationCode.trim());
               setVerificationCode("");
               const recoveryKey = service.secrets?.recoveryKey;
-              if (firstKey && service.ready && recoveryKey) {
+              if (firstKey && service.ready && service.hasPrivateAccess && recoveryKey) {
                 setRecovery(recoveryKey);
                 setModal("recovery");
               }
@@ -951,6 +1222,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
         (e.creatorId === service.userId) === (authorFilter === "我")) &&
       (!tagFilter || e.data.tags?.some((t) => t.includes(tagFilter))),
   );
+  const memoryFilters = JSON.stringify([search, filter, monthFilter, authorFilter, tagFilter]);
   const showMemories = (rows: Entry[], compact = false) =>
     rows.length ? (
       <div className={compact ? "memory-grid" : "timeline-grid"}>
@@ -1032,14 +1304,15 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
         </button>
         <div className="side-space">
           <div className="avatar-pair">
-            <span className={`avatar ${firstAvatar.color}`}>{firstAvatar.name}</span>
-            <span className={`avatar ${secondAvatar.color}`}>{secondAvatar.name}</span>
+            {memberAvatars.map(({ name, color }) =>
+              <span className={`avatar ${color}`} key={color}>{[...name][0]}</span>,
+            )}
             <i>
               <Heart size={10} fill="currentColor" />
             </i>
           </div>
           <strong>
-            {mode === "demo"
+            {hosted ? memberAvatars.map(({ name }) => name).join(" & ") : mode === "demo"
               ? SPACE_MEMBER_NAMES.join(" & ")
               : relationship?.data.body || "我 & 你"}
           </strong>
@@ -1084,11 +1357,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
           </div>
           <button
             className="side-security"
-            onClick={() => {
-              go("profile");
-              setModal("security");
-              run(async () => setDevices(await service.devices()));
-            }}
+            onClick={() => openSettingsPane("devices")}
           >
             <ShieldCheck size={16} />
             <span>隐私与安全</span>
@@ -1124,7 +1393,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
               <RefreshCw size={17} className={busy ? "spin" : ""} />
             </button>
             <button className={`avatar small ${myAvatar.color}`} onClick={() => go("profile")}>
-              {myAvatar.name}
+              {[...myAvatar.name][0]}
             </button>
           </div>
         </header>
@@ -1150,7 +1419,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                     service.space.closeConfirmations?.includes(service.userId)
                   }
                   onClick={() =>
-                    run(() => service.closeSpace(), "关闭状态已更新")
+                    runSensitive("closeSpace", "同意关闭空间", () => service.closeSpace(), "关闭状态已更新")
                   }
                 >
                   {service.space.closeConfirmations?.includes(service.userId)
@@ -1162,7 +1431,8 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                 className="secondary"
                 disabled={busy}
                 onClick={() =>
-                  run(
+                  runSensitive(
+                    "cancelClose", "撤销关闭",
                     () => service.cancelClose(),
                     "关闭已撤销，双方可以继续使用",
                   )
@@ -1295,7 +1565,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                     <span className="tiny">轻轻告诉对方</span>
                   </div>
                   <div className="mood-row">
-                    <span className={`avatar ${myAvatar.color}`}>{myAvatar.name}</span>
+                    <span className={`avatar ${myAvatar.color}`}>{[...myAvatar.name][0]}</span>
                     <div>
                       <strong>
                         我今天<span className="tiny"> · 主动分享</span>
@@ -1311,10 +1581,10 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                     <span className="mood-sun">☀</span>
                   </div>
                   <div className="mood-row">
-                    <span className={`avatar ${partnerAvatar.color}`}>{partnerAvatar.name}</span>
+                    <span className={`avatar ${partnerAvatar.color}`}>{[...partnerAvatar.name][0]}</span>
                     <div>
                       <strong>
-                        {mode === "demo" ? partnerAvatar.name : "对方"}
+                        {hosted || mode === "demo" ? partnerAvatar.name : "对方"}
                         <span className="tiny"> · 只展示分享的心情</span>
                       </strong>
                       <span className="mood-bubble lavender">
@@ -1369,6 +1639,9 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                   </button>
                 ))}
               </div>
+              {hosted && showCompanionship && (
+                <HomeCompanionship service={service} day={day} busy={busy} run={run} open={viewEntry} />
+              )}
               <div className="home-bottom">
                 <section>
                   <div className="section-title">
@@ -1461,20 +1734,26 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
 
           {page === "memories" && (
             <>
+              {!service.hasPrivateAccess && <p className="fineprint">
+                此设备仅能使用共同空间。<button type="button" className="text-button" onClick={() => setModal("restore")}>恢复私人记录</button>
+              </p>}
               <div className="toolbar">
                 <div className="pills">
                   {[
                     ["timeline", "时间轴"],
                     ["album", "相册"],
+                    ...(hosted && showGalaxy ? [["galaxy", "回忆银河"]] : []),
+                    ...(hosted ? [["book", "回忆纪念册"]] : []),
                     ["capsules", "时光胶囊"],
                     ["map", "共同足迹"],
                     ["report", "回忆报告"],
-                    ["ai", "AI 回忆助手"],
+                    ...(!hosted || showAiExperiment ? [["ai", "AI 回忆助手"]] : []),
                   ].map(([id, name]) => (
                     <button
                       className={section === id ? "selected" : ""}
                       onClick={() => {
                         setSection(id);
+                        if (id === "galaxy" && filter === "私人日记") setFilter("共同回忆");
                         setAiPreview(false);
                       }}
                       key={id}
@@ -1503,11 +1782,19 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                       : "记一笔"}
                 </button>
               </div>
-              {["timeline", "album"].includes(section) && (
+              {section === "galaxy" && (!hosted || !showGalaxy) && (
+                <section className="card"><h2>回忆银河</h2>
+                  <button className="secondary" onClick={() => go("profile")}>前往设置</button>
+                </section>
+              )}
+              {section === "book" && hosted && (
+                <MemoryBook memories={memories} service={service} draft={bookDraft} setDraft={setBookDraft} openMemory={viewEntry} />
+              )}
+              {(["timeline", "album"].includes(section) || (section === "galaxy" && hosted && showGalaxy)) && (
                 <>
                   <div className="filter-row">
                     <div className="pills small">
-                      {["全部", "共同回忆", "私人日记", "收藏"].map((f) => (
+                      {["全部", "共同回忆", ...(section === "galaxy" ? [] : ["私人日记"]), "收藏"].map((f) => (
                         <button
                           className={filter === f ? "selected" : ""}
                           key={f}
@@ -1568,13 +1855,18 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                     </button>
                   </div>
                   {section === "timeline" ? (
-                    showMemories(filteredMemories)
+                    <MemoryPages key={`timeline:${memoryFilters}`} label="回忆时间轴" items={filteredMemories} render={showMemories} />
+                  ) : section === "galaxy" ? (
+                    <MemoryGalaxy entries={filteredMemories} allEntries={memories} service={service}
+                      state={galaxy} setState={setGalaxy} scrollPosition={galaxyScroll.current}
+                      reduceMotion={reduceMotion} openMemory={viewEntry} />
                   ) : (
-                    <div className="album-grid">
-                      {filteredMemories.flatMap((e) =>
-                        (e.data.photos || []).map((p) => (
+                    <MemoryPages key={`album:${memoryFilters}`} label="回忆相册"
+                      items={filteredMemories.flatMap((e) => (e.data.photos ?? []).map((p) => ({ e, p })))}
+                      render={(photos) => <div className="album-grid">
+                        {photos.map(({ e, p }) => (
                           <button
-                            key={p.id}
+                            key={`${e.id}:${p.id}`}
                             className="polaroid"
                             onClick={() => viewEntry(e)}
                           >
@@ -1586,9 +1878,8 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                             <span>{e.data.title}</span>
                             <small>{dateLabel(e.data.date)}</small>
                           </button>
-                        )),
-                      )}
-                      {!filteredMemories.some((e) => e.data.photos?.length) && (
+                        ))}
+                      {photos.length === 0 && (
                         <Empty
                           icon={<Camera />}
                           title="相册的第一页，留给你"
@@ -1597,7 +1888,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                           label="收藏照片"
                         />
                       )}
-                    </div>
+                    </div>} />
                   )}
                 </>
               )}
@@ -1765,35 +2056,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                             <ChevronRight size={16} />
                           </button>
                         ))}
-                      <button
-                        className="secondary full"
-                        onClick={() => setMapConsent((v) => !v)}
-                      >
-                        {mapConsent ? "收起外部地图链接" : "查看坐标地图选项"}
-                      </button>
-                      {mapConsent && (
-                        <div className="map-privacy">
-                          <p>
-                            打开外部地图会把选中坐标发送给地图服务。这里不采集实时位置。
-                          </p>
-                          {entries
-                            .filter(
-                              (e) =>
-                                e.data.kind === "place" &&
-                                e.data.latitude !== undefined,
-                            )
-                            .map((e) => (
-                              <a
-                                href={`https://uri.amap.com/marker?position=${e.data.longitude},${e.data.latitude}&name=${encodeURIComponent(e.data.title)}`}
-                                target="_blank"
-                                rel="noreferrer"
-                                key={e.id}
-                              >
-                                {e.data.title} ↗
-                              </a>
-                            ))}
-                        </div>
-                      )}
+                      {(!hosted || showExternalMap) && <ExternalMap entries={entries} />}
                     </div>
                   </div>
                 </>
@@ -1885,13 +2148,18 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                   </p>
                 </div>
               )}
-              {section === "ai" && (
+              {section === "ai" && hosted && !showAiExperiment && (
+                <section className="card"><h2>AI 回忆助手</h2>
+                  <button className="secondary" onClick={() => go("profile")}>前往设置</button>
+                </section>
+              )}
+              {section === "ai" && (!hosted || showAiExperiment) && (
                 <div className="ai-layout">
                   <section className="card">
                     <WandSparkles className="rose" size={32} />
                     <h2>让零散的回忆，连成一段故事</h2>
                     <p className="muted">
-                      先选几条共同回忆，再预览本次要发送的文字。
+                      {hosted ? "选取共同回忆，在本机预览用于整理的文字。" : "先选几条共同回忆，再预览本次要发送的文字。"}
                     </p>
                     <div className="ai-selector">
                       {sharedMemories.map((e) => (
@@ -1924,7 +2192,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                         setAiConsent(false);
                       }}
                     >
-                      预览将发送的内容
+                      {hosted ? "在本机预览" : "预览将发送的内容"}
                       <ArrowRight size={16} />
                     </button>
                     <p className="fineprint">
@@ -1935,8 +2203,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                   <section className="card ai-result">
                     {aiPreview ? (
                       <>
-                        <span className="eyebrow">REVIEW BEFORE SHARING</span>
-                        <h3>这一次，只发送这些文字</h3>
+                        <h3>{hosted ? "所选共同回忆" : "这一次，只发送这些文字"}</h3>
                         <pre>
                           {sharedMemories
                             .filter((e) => aiSelected.includes(e.id))
@@ -1946,7 +2213,10 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                             )
                             .join("\n\n")}
                         </pre>
-                        <label className="check-line">
+                        {hosted ? <>
+                          <p className="fineprint">当前网站尚未配置 AI 服务，文字仅在本机预览。</p>
+                          <button type="button" className="secondary" onClick={() => setAiPreview(false)}>关闭预览</button>
+                        </> : <><label className="check-line">
                           <input
                             type="checkbox"
                             checked={aiConsent}
@@ -1982,7 +2252,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                           本机预览未连接 AI 服务。微信版需配置服务地址、模型与
                           API 密钥。 正式整理需已绑定两位成员；输入最多 6000
                           字，每空间每天最多 10 次。
-                        </p>
+                        </p></>}
                       </>
                     ) : (
                       <div className="empty-ai">
@@ -2036,6 +2306,8 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                     ["quiz", "默契小问答"],
                     ["roulette", "约会转盘"],
                     ["truth", "真心话"],
+                    ...(hosted && showMealPlan ? [["food", "今天吃什么"]] : []),
+                    ...(hosted && showWardrobe ? [["wardrobe", "今天穿什么"]] : []),
                   ].map(([id, name]) => (
                     <button
                       className={section === id ? "selected" : ""}
@@ -2049,6 +2321,17 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                   ))}
                 </div>
               </div>
+              {section === "food" && (hosted && showMealPlan
+                ? <MealDecision service={service} busy={busy} run={run} open={viewEntry} />
+                : <section className="card meal-decision"><h2>今天吃什么</h2>
+                  <button className="secondary" onClick={() => go("profile")}>前往设置</button>
+                </section>)}
+              {section === "wardrobe" && (hosted && showWardrobe
+                ? <Wardrobe service={service} busy={busy} run={run}
+                    photo={(attachment) => <Photo photo={attachment} visibility="private" service={service} />} />
+                : <section className="card wardrobe-panel"><h2>今天穿什么</h2>
+                  <button className="secondary" onClick={() => go("profile")}>前往设置</button>
+                </section>)}
               {section === "games" && (
                 <>
                   <div className="feature-banner play-banner">
@@ -2574,6 +2857,86 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
           {page === "profile" && (
             <div className="profile-layout">
               <section className="card profile-card">
+                {account && (
+                  <label className="motion-preference">
+                    <span>本机密文缓存<small>断网时可用本机口令查看最近 24 小时内缓存的日记和照片。</small></span>
+                    <input type="checkbox" checked={service.cipherCacheEnabled} disabled={busy}
+                      onChange={(event) => {
+                        const enabled = event.target.checked;
+                        void run(() => service.setCipherCacheEnabled(enabled));
+                      }} />
+                  </label>
+                )}
+                {hosted?.installation}
+                {account && (
+                  <label className="motion-preference">
+                    <span>站内陪伴<small>首页显示想你、回送与那年今日</small></span>
+                    <input type="checkbox" checked={showCompanionship} onChange={(event) => {
+                      const next = event.target.checked;
+                      void run(async () => {
+                        service.storage.set("companionship", String(next));
+                        setShowCompanionship(next);
+                      });
+                    }} />
+                  </label>
+                )}
+                {account && (
+                  <label className="motion-preference">
+                    <span>今天吃什么<small>在「互动」启用双人选餐</small></span>
+                    <input type="checkbox" checked={showMealPlan} onChange={(event) => {
+                      const next = event.target.checked;
+                      void run(async () => {
+                        service.storage.set("mealPlan", String(next));
+                        setShowMealPlan(next);
+                      });
+                    }} />
+                  </label>
+                )}
+                {account && (
+                  <label className="motion-preference">
+                    <span>今天穿什么<small>在「互动」启用私人衣橱和搭配</small></span>
+                    <input type="checkbox" checked={showWardrobe} onChange={(event) => {
+                      const next = event.target.checked;
+                      void run(async () => {
+                        service.storage.set("wardrobe", String(next));
+                        setShowWardrobe(next);
+                      });
+                    }} />
+                  </label>
+                )}
+                {account && (
+                  <label className="motion-preference">
+                    <span>回忆银河<small>在「时光」查看共同回忆的照片星图</small></span>
+                    <input type="checkbox" checked={showGalaxy} onChange={(event) => {
+                      const next = event.target.checked;
+                      void run(async () => {
+                        service.storage.set("memoryGalaxy", String(next));
+                        setShowGalaxy(next);
+                      });
+                    }} />
+                  </label>
+                )}
+                {account && <>
+                  <label className="motion-preference">
+                    <span>外部地图试用<small>逐次确认要提供给高德地图的经纬度</small></span>
+                    <input type="checkbox" checked={showExternalMap} onChange={(event) => {
+                      const next = event.target.checked;
+                      void run(async () => { service.storage.set("externalMap", String(next)); setShowExternalMap(next); });
+                    }} />
+                  </label>
+                  <label className="motion-preference">
+                    <span>AI 回忆助手试用<small>在本机预览选中的共同文字</small></span>
+                    <input type="checkbox" checked={showAiExperiment} onChange={(event) => {
+                      const next = event.target.checked;
+                      void run(async () => {
+                        service.storage.set("aiExperiment", String(next));
+                        setAiPreview(false);
+                        setAiSelected([]);
+                        setShowAiExperiment(next);
+                      });
+                    }} />
+                  </label>
+                </>}
                 <label className="motion-preference">
                   <span>
                     减少动态效果<small>保留操作反馈，减少旋转与跳动</small>
@@ -2590,8 +2953,14 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                     }}
                   />
                 </label>
-                <span className={`avatar ${myAvatar.color} xlarge`}>{myAvatar.name}</span>
-                <h2>{mode === "demo" ? myAvatar.name : "我的小角落"}</h2>
+                <span className={`avatar ${myAvatar.color} xlarge`}>{[...myAvatar.name][0]}</span>
+                <h2>{hosted || mode === "demo" ? myAvatar.name : "我的小角落"}</h2>
+                {hosted && service.space?.status === "active" && (
+                  <button className="text-button" onClick={() => {
+                    setNickname(service.displayNames.get(service.userId) ?? "");
+                    setModal("nickname");
+                  }}>修改昵称</button>
+                )}
                 <p className="muted">愿每个平凡的日子，都有小小的喜欢。</p>
                 <span className="private-badge">
                   <LockKeyhole size={13} />{" "}
@@ -2665,21 +3034,13 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                     icon: ShieldCheck,
                     title: "设备与安全",
                     text: "安全码、设备授权与密钥交换",
-                    action: async () => {
-                      await run(async () =>
-                        setDevices(await service.devices()),
-                      );
-                      setModal("security");
-                    },
+                    action: () => openSettingsPane("devices"),
                   },
                   {
                     icon: KeyRound,
-                    title: "备份与恢复密钥",
+                    title: service.hasPrivateAccess ? "备份与恢复密钥" : "恢复私人记录",
                     text: "为重要的回忆留一把备用钥匙",
-                    action: () => {
-                      setBackupPassword("");
-                      setModal("verify-backup");
-                    },
+                    action: () => openSettingsPane("backup"),
                   },
                   {
                     icon: ArrowDownToLine,
@@ -2779,17 +3140,33 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
               ? "首页会从这一天开始计算我们的在一起天数。"
               : "把此刻的心情，好好放在这一页。"
           }
-          close={close}
+          close={requestEditorClose}
           wide
         >
           <Editor
+            key={editing?.id ?? modal}
             kind={modal.slice(5)}
             service={service}
             existing={editing}
             busy={busy}
             run={run}
-            done={close}
+            done={finishEditor}
+            dirty={editorDirty}
           />
+        </Modal>
+      )}
+      {modal === "nickname" && (
+        <Modal title="修改昵称" close={close}>
+          <form onSubmit={(event) => {
+            event.preventDefault();
+            void run(async () => { await service.saveDisplayName(nickname); close(); }, "昵称已保存");
+          }}>
+            <Field label="共同空间显示的昵称">
+              <input value={nickname} maxLength={32} placeholder={hosted?.owner ? firstAvatar.name : secondAvatar.name}
+                onChange={(event) => setNickname(event.target.value)} />
+            </Field>
+            <button className="primary full" disabled={busy}>保存昵称</button>
+          </form>
         </Modal>
       )}
       {modal === "mood" && (
@@ -2825,7 +3202,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
         <Modal
           title={detail.data.title}
           subtitle={`${dateLabel(detail.data.date)} · ${detail.visibility === "private" ? "私人记录" : "共同回忆"}`}
-          close={close}
+          close={closeDetail}
           wide
         >
           <div className="detail-photos">
@@ -2872,7 +3249,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
               onClick={() =>
                 run(async () => {
                   await service.trash(detail);
-                  close();
+                  closeDetail();
                 }, "已放入回收站")
               }
             >
@@ -3064,6 +3441,8 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
           {service.lastSyncError && (
             <p className="error-text">最近同步提示：{service.lastSyncError}</p>
           )}
+          {service.syncStorageWarning && <p className="error-text">{service.syncStorageWarning}</p>}
+          {service.supportsOutbox && <OutboxPanel service={service} revision={revision} busy={busy} run={run} />}
           <button
             className="primary full"
             disabled={busy}
@@ -3080,8 +3459,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
             检查并刷新
           </button>
           <p className="fineprint">
-            网络中断时不会自动重发保存、删除或 AI
-            生成操作。若结果不确定，请先联网刷新，避免重复提交。
+            选择「先存本机」的日记可在重新联网后同步。普通保存结果不确定时，请先核对保存回执。
           </p>
         </Modal>
       )}
@@ -3123,7 +3501,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                 </span>
                 {hosted && service.ready && d.id !== service.secrets!.deviceId && (
                   <button className="text-button" disabled={busy || fingerprint(d) !== verificationCode.trim().toUpperCase().replace(/\s+/g, " ")} onClick={() =>
-                    run(() => service.transfer(d, verificationCode.trim()), "空间密钥已发送")
+                    runSensitive("putTransfer", "发送空间密钥", () => service.transfer(d, verificationCode.trim()), "空间密钥已发送")
                   }>发送空间密钥</button>
                 )}
                 {d.id !== service.secrets!.deviceId &&
@@ -3131,7 +3509,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                     <button
                       className="text-button"
                       onClick={() =>
-                        run(async () => {
+                        runSensitive("revokeDevice", "撤销设备", async () => {
                           await service.call("revokeDevice", {
                             targetDeviceId: d.id,
                           });
@@ -3151,7 +3529,8 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
           <button
             className="secondary full"
             onClick={() =>
-              run(
+              runSensitive(
+                "rotateSpaceKey", "轮换未来记录密钥",
                 () => service.rotateKey(),
                 "未来记录的密钥已轮换，请对方接收新密钥",
               )
@@ -3178,10 +3557,12 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
       {modal === "export" && (
         <Modal title="把回忆，好好带走" close={close}>
           <p className="muted">
-            加密备份需要恢复密钥才能打开。明文导出会包含你有权查看的文字与照片说明。
+            加密备份用于恢复密钥。可读归档包含选定的记录和实际照片，可以离线打开。
           </p>
+          {!service.hasPrivateAccess && <p className="fineprint">此设备仅能查看共同空间。请保管原设备的加密备份以恢复私人记录。</p>}
           <button
             className="primary full"
+            disabled={!service.hasPrivateAccess}
             onClick={() => {
               setBackupPassword("");
               setModal("verify-backup");
@@ -3193,7 +3574,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
             className="secondary full"
             onClick={() => setModal("export-plain")}
           >
-            导出明文记录
+            导出可读图文归档
           </button>
           <button
             className="text-button full"
@@ -3205,25 +3586,10 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
       )}
       {modal === "export-plain" && (
         <Modal title="导出可直接阅读的记录？" close={close}>
-          <p className="muted">
-            导出的 JSON
-              文件不再受应用加密保护，包含你可见的日记、计划、留言和照片说明。
-              {hosted ? "网站的加密密钥备份用于恢复解锁密钥，照片仍保存在服务端。"
-                : "照片文件包含在加密备份中。"}
-          </p>
-          <button
-            className="primary full"
-            onClick={() => {
-              download(
-                `Us-明文回忆-${day}.json`,
-                JSON.stringify(service.entries, null, 2),
-              );
-              close();
-              notify("明文记录已导出，请妥善保管");
-            }}
-          >
-            确认并导出明文记录
-          </button>
+          <ArchiveExport service={service} busy={busy} run={run} complete={(partial) => {
+            close();
+            notify(partial ? "已导出可用内容。未导出的项目见归档清单。" : "图文归档已导出，请妥善保管");
+          }} />
         </Modal>
       )}
       {modal === "restore" && (
@@ -3317,7 +3683,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
           <button
             className="danger-button full"
             onClick={() =>
-              run(async () => {
+              runSensitive("closeSpace", "确认关闭空间", async () => {
                 await service.closeSpace();
                 close();
               }, "关闭状态已更新，请留意双方确认状态并保存备份")
@@ -3325,6 +3691,31 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
           >
             确认关闭空间
           </button>
+        </Modal>
+      )}
+      {authorization && (
+        <Modal title={authorization.title} close={cancelAuthorization}>
+          <form onSubmit={(event) => {
+            event.preventDefault();
+            const attempt = ++authorizationAttempt.current;
+            const device = service.secrets;
+            const password = websitePassword;
+            setWebsitePassword("");
+            void run(async () => {
+              await service.call("authorizeSensitiveAction", { password, forAction: authorization.action });
+              if (attempt !== authorizationAttempt.current) return;
+              if (service.secrets !== device) throw new AppError("LOCKED", "当前设备已锁定，请解锁后重试");
+              cancelAuthorization();
+              await authorization.execute();
+              notify(authorization.success);
+            });
+          }}>
+            <Field label="重新输入网站密码">
+              <input type="password" value={websitePassword} autoComplete="current-password" required
+                onChange={(event) => setWebsitePassword(event.target.value)} />
+            </Field>
+            <button className="primary full" disabled={busy || !websitePassword}>验证并继续</button>
+          </form>
         </Modal>
       )}
       {modal === "new-space" && (
@@ -3418,6 +3809,58 @@ function Empty({
   );
 }
 
+function ArchiveExport({ service, busy, run, complete }: {
+  service: UsService;
+  busy: boolean;
+  run: <T>(fn: () => Promise<T>) => Promise<T | undefined>;
+  complete: (partial: boolean) => void;
+}) {
+  const [scope, setScope] = useState<ArchiveScope>({ visibility: "shared", from: "", to: "" });
+  const [password, setPassword] = useState("");
+  const [progress, setProgress] = useState("");
+  const active = useRef<AbortController | null>(null);
+  useEffect(() => () => active.current?.abort(), []);
+  return <form aria-label="导出可读图文归档" onSubmit={(event) => {
+    event.preventDefault();
+    if (busy || active.current) return;
+    const controller = new AbortController();
+    active.current = controller;
+    const pass = password;
+    setPassword("");
+    setProgress("正在核对权限和记录…");
+    void run(async () => {
+      try {
+        const { createArchive } = await import("./archive");
+        const { blob, manifest } = await createArchive(service, scope, pass, controller.signal, (count, total) => {
+          setProgress(total ? `已处理 ${count} / ${total} 张照片` : "正在生成归档…");
+        });
+        if (!controller.signal.aborted) {
+          download(`Us-图文回忆-${today()}.zip`, blob);
+          complete(manifest.failedPhotos.length > 0 || manifest.unreadableRecordsInSpace > 0);
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) throw error;
+      } finally {
+        active.current = null;
+        if (!controller.signal.aborted) setProgress("");
+      }
+    });
+  }}>
+    <p className="muted">ZIP 保存的是可直接阅读的明文。解压后打开 index.html 查看照片和记录。未开启的胶囊按原规则保留在空间中。</p>
+    <Field label="导出范围"><select value={scope.visibility} disabled={busy} onChange={(event) => setScope({ ...scope, visibility: event.target.value as ArchiveScope["visibility"] })}>
+      <option value="shared">共同记录</option>
+      {service.hasPrivateAccess && <><option value="private">我的私人记录</option><option value="all">共同和我的私人记录</option></>}
+    </select></Field>
+    <div className="editor-meta">
+      <Field label="起始日期（可选）"><input type="date" value={scope.from} disabled={busy} onChange={(event) => setScope({ ...scope, from: event.target.value })} /></Field>
+      <Field label="结束日期（可选）"><input type="date" value={scope.to} disabled={busy} onChange={(event) => setScope({ ...scope, to: event.target.value })} /></Field>
+    </div>
+    <Field label="确认本机解锁口令"><input type="password" value={password} autoComplete="current-password" disabled={busy} onChange={(event) => setPassword(event.target.value)} required /></Field>
+    {progress && <p role="status">{progress}</p>}
+    <button className="primary full" disabled={busy}>确认并下载 ZIP</button>
+  </form>;
+}
+
 function Editor({
   kind,
   service,
@@ -3425,6 +3868,7 @@ function Editor({
   busy,
   run,
   done,
+  dirty,
 }: {
   kind: string;
   service: UsService;
@@ -3432,16 +3876,30 @@ function Editor({
   busy: boolean;
   run: <T>(fn: () => Promise<T>, success?: string) => Promise<T | undefined>;
   done: () => void;
+  dirty: { current: boolean };
 }) {
   const isRelationship =
     kind === "relationship" || existing?.data.category === "relationship";
-  const draft =
-    !existing && kind === "memory"
-      ? service.loadDraft<{ form: Payload; visibility: Visibility }>()
-      : null;
+  const draftSlot = existing ? `draft:edit:${existing.id}` : "draft";
+  const isMemory = kind === "memory";
+  const [{ draft, draftUnavailable }] = useState(() => {
+    try {
+      const saved = isMemory
+        ? service.loadDraft<{ form: Payload; visibility: Visibility; base?: Entry }>(draftSlot) : null;
+      if (saved?.visibility === "private" && !service.hasPrivateAccess)
+        return { draft: null, draftUnavailable: true };
+      return { draft: saved, draftUnavailable: false };
+    } catch {
+      return { draft: null, draftUnavailable: true };
+    }
+  });
+  const [base, setBase] = useState(draft?.base ?? existing);
+  const changedSinceDraft = !!existing && !!draft?.base && existing.revision !== draft.base.revision;
+  const [conflict, setConflict] = useState(changedSinceDraft);
+  const [latest, setLatest] = useState<Entry | null>(changedSinceDraft ? existing : null);
   const [form, setForm] = useState<Payload>(
-    existing?.data ||
-      draft?.form || {
+    draft?.form ||
+      existing?.data || {
         kind: isRelationship ? "anniversary" : (kind as Payload["kind"]),
         ...(isRelationship ? { category: "relationship" } : {}),
         title: isRelationship ? "我们的小世界" : "",
@@ -3454,60 +3912,79 @@ function Editor({
       },
   );
   const [visibility, setVisibility] = useState<Visibility>(
-    existing?.visibility || draft?.visibility || "shared",
+    existing?.visibility || (service.hasPrivateAccess ? draft?.visibility : undefined) || "shared",
   );
   const [photosBusy, setPhotosBusy] = useState(false);
   const [photoError, setPhotoError] = useState("");
+  const [failedPhotos, setFailedPhotos] = useState<{ file: File; message: string }[]>([]);
+  const [queuedPhotos, setQueuedPhotos] = useState<Awaited<ReturnType<UsService["prepareQueuedPhoto"]>>[]>([]);
+  const photoCount = (form.photos?.length ?? 0) + queuedPhotos.length;
   const [saved, setSaved] = useState("");
   const generation = useRef(0);
   const saving = useRef<Promise<void>>(Promise.resolve());
-  const initial = useRef(true);
+  const initial = useRef({ form, visibility, base });
+  const [persisted, setPersisted] = useState(initial.current);
+  const draftTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const set = (patch: Partial<Payload>) => setForm((f) => ({ ...f, ...patch }));
+  useLayoutEffect(() => {
+    dirty.current = persisted.form !== form || persisted.visibility !== visibility || persisted.base !== base ||
+      photosBusy || failedPhotos.length > 0 || queuedPhotos.length > 0;
+    return () => { dirty.current = false; };
+  }, [dirty, persisted, form, visibility, base, photosBusy, failedPhotos.length, queuedPhotos.length]);
   useEffect(() => {
-    if (existing || kind !== "memory") return;
-    if (initial.current) {
-      initial.current = false;
-      return;
-    }
-    const id = setTimeout(() => {
+    if (!isMemory || (initial.current.form === form && initial.current.visibility === visibility && initial.current.base === base)) return;
+    const id = draftTimer.current = setTimeout(() => {
       const value = ++generation.current;
       saving.current = saving.current
-        .then(() => service.saveDraft({ form, visibility }))
+        .then(() => service.saveDraft({ form, visibility, base }, draftSlot))
         .then(() => {
-          if (value === generation.current) setSaved("已在本机加密保存草稿");
+          if (value === generation.current) {
+            setPersisted({ form, visibility, base });
+            setSaved("已在本机加密保存草稿");
+          }
+        }).catch(() => {
+          if (value === generation.current) setSaved("草稿保存失败，请保留当前编辑内容");
         });
     }, 600);
     return () => clearTimeout(id);
-  }, [form, visibility, service, existing, kind]);
-  const upload = async (files: FileList | null) => {
-    if (!files) return;
+  }, [form, visibility, service, isMemory, draftSlot, base]);
+  const upload = async (files: File[]) => {
+    if (!files.length || photosBusy) return;
+    const remaining = Math.max(0, 6 - photoCount);
+    const selected = files.slice(0, remaining);
+    const session = service.secrets;
+    if (!selected.length || !session) return;
     setPhotosBusy(true);
-    setPhotoError("");
+    setPhotoError(files.length > remaining ? `本次只处理了能加入的 ${remaining} 张照片，记录最多六张。` : "");
+    setFailedPhotos((current) => current.filter(({ file }) => !selected.includes(file)));
     try {
-      for (const file of Array.from(files).slice(
-        0,
-        Math.max(0, 6 - (form.photos?.length || 0)),
-      )) {
-        const prepared = await prepareBrowserPhoto(file);
-        const bytes = await new Promise<string>((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(String(reader.result).split(",")[1]);
-          reader.onerror = reject;
-          reader.readAsDataURL(prepared);
-        });
-        const photo = await service.addPhoto(
-          bytes,
-          prepared.type,
-          file.name,
-          visibility,
-        );
-        setForm((value) => ({
-          ...value,
-          photos: [...(value.photos || []), photo],
-        }));
+      for (const file of selected) {
+        if (service.secrets !== session) break;
+        try {
+          const prepared = await prepareBrowserPhoto(file);
+          const bytes = await new Promise<string>((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(String(reader.result).split(",")[1]);
+            reader.onerror = reject;
+            reader.readAsDataURL(prepared);
+          });
+          if (service.secrets !== session) break;
+          if (isMemory && service.supportsOutbox && !navigator.onLine) {
+            const queued = await service.prepareQueuedPhoto(bytes, prepared.type, file.name, visibility);
+            if (service.secrets !== session) break;
+            setQueuedPhotos((photos) => [...photos, queued]);
+            continue;
+          }
+          const photo = await service.addPhoto(bytes, prepared.type, file.name, visibility);
+          if (service.secrets !== session) break;
+          setForm((value) => ({ ...value, photos: [...(value.photos ?? []), photo] }));
+        } catch (error) {
+          if (service.secrets !== session) break;
+          setFailedPhotos((current) => [...current, {
+            file, message: error instanceof Error ? error.message : "照片暂时未能添加",
+          }]);
+        }
       }
-    } catch (e) {
-      setPhotoError((e as Error).message);
     } finally {
       setPhotosBusy(false);
     }
@@ -3516,13 +3993,27 @@ function Editor({
     <form
       onSubmit={(e) => {
         e.preventDefault();
+        if (busy || photosBusy || conflict || service.hasPendingSave || queuedPhotos.length > 0) return;
         run(
           async () => {
             if (form.kind === "capsule" && form.unlockDate! < today())
               throw new AppError("INVALID_DATE", "请选择今天或之后的开启日期");
+            clearTimeout(draftTimer.current);
             await saving.current;
-            await service.save(form, visibility, existing);
-            if (!existing && kind === "memory") service.storage.remove("draft");
+            if (isMemory) {
+              await service.saveDraft({ form, visibility, base }, draftSlot);
+              setPersisted({ form, visibility, base });
+            }
+            try {
+              await service.save(form, visibility, base, undefined, true);
+            } catch (error) {
+              if (error instanceof AppError && error.code === "REVISION_CONFLICT") {
+                setLatest(null);
+                setConflict(true);
+              }
+              throw error;
+            }
+            if (isMemory) service.storage.remove(draftSlot);
             done();
           },
           isRelationship
@@ -3531,6 +4022,37 @@ function Editor({
         );
       }}
     >
+      {service.hasPendingSave && <div className="notice" role="status">
+        上一次保存尚未确认。先核对该次保存，再提交新的内容。
+        <button type="button" className="text-button" disabled={busy} onClick={() => run(async () => {
+          const confirmed = await service.resumePendingSave();
+          if (confirmed && isMemory && (existing?.id === confirmed.id || !existing && confirmed.expectedRevision === 0)) {
+            const remote = service.entries.find((entry) => entry.id === confirmed.id);
+            if (remote && JSON.stringify(remote.data) === JSON.stringify(form)) service.storage.remove(draftSlot);
+          }
+          done();
+        }, "已核对上一次保存")}>核对并继续原保存</button>
+      </div>}
+      {conflict && <div className="notice" role="status">
+        另一台设备已更新这条记录，你的编辑仍保留。
+        <button type="button" className="text-button" disabled={busy} onClick={() => run(async () => {
+          await service.refresh();
+          const current = service.active.find((entry) => entry.id === existing?.id);
+          if (!current) throw new AppError("RECORD_UNAVAILABLE", "这条记录已移出时间线，请先核对回收站");
+          setLatest(current);
+        })}>查看最新版本</button>
+        {latest && <div>
+          <strong>{latest.data.title}</strong><p>{latest.data.body}</p>
+          <button type="button" className="text-button" onClick={() => {
+            const previous = base?.data;
+            if (previous) setForm({ ...latest.data, ...Object.fromEntries(Object.entries(form).filter(([key, value]) =>
+              JSON.stringify(value) !== JSON.stringify(previous[key as keyof Payload]),
+            )) });
+            setBase(latest);
+            setConflict(false);
+          }}>保留我的编辑，以此版本为基础</button>
+        </div>}
+      </div>}
       <div className="editor-meta">
         <Field
           label={
@@ -3554,16 +4076,17 @@ function Editor({
             <select
               value={visibility}
               disabled={
-                photosBusy || !!existing || !!form.photos?.some((p) => p.fileId)
+                photosBusy || !!existing || !!form.photos?.some((p) => p.fileId) || queuedPhotos.length > 0
               }
               onChange={(e) => setVisibility(e.target.value as Visibility)}
             >
               <option value="shared">我们两个人</option>
-              <option value="private">只有我自己</option>
+              <option value="private" disabled={!service.hasPrivateAccess}>只有我自己</option>
             </select>
           </Field>
         )}
       </div>
+      {draftUnavailable && <p className="fineprint">旧草稿无法用当前设备密钥打开。</p>}
       {isRelationship && (
         <p className="muted">
           恋爱开始当天记为第 1
@@ -3632,10 +4155,19 @@ function Editor({
                 type="file"
                 multiple
                 accept="image/jpeg,image/png,image/webp"
-                disabled={photosBusy || (form.photos?.length || 0) >= 6}
-                onChange={(e) => upload(e.target.files)}
+                disabled={photosBusy || photoCount >= 6}
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  e.target.value = "";
+                  void upload(files);
+                }}
               />
             </label>
+            {failedPhotos.map(({ file, message }, index) => <div className="notice" key={`${file.name}-${index}`}>
+              <strong>{file.name}</strong><p>{message}</p>
+              <button type="button" className="text-button" disabled={photosBusy || photoCount >= 6} onClick={() => void upload([file])}>重试此照片</button>
+              <button type="button" className="text-button" onClick={() => setFailedPhotos((current) => current.filter((failure) => failure.file !== file))}>移除失败照片</button>
+            </div>)}
             <div className="editor-photos">
               {form.photos?.map((p) => (
                 <div key={p.id}>
@@ -3652,6 +4184,15 @@ function Editor({
                 </div>
               ))}
             </div>
+            {queuedPhotos.length > 0 && <div className="notice">
+              <p>这些照片将随日记保存在待同步队列。</p>
+              <ul>{queuedPhotos.map(({ photo }) => <li key={photo.id}>{photo.name}
+                <button type="button" className="text-button" disabled={photosBusy}
+                  onClick={() => setQueuedPhotos((items) => items.filter((item) => item.photo.id !== photo.id))}>
+                  移除待同步照片
+                </button>
+              </li>)}</ul>
+            </div>}
             {photoError && <p className="error-text">{photoError}</p>}
           </div>
         </>
@@ -3782,7 +4323,22 @@ function Editor({
           <LockKeyhole size={12} />
           {saved || "保存前在本机加密"}
         </span>
-        <button className="primary" disabled={busy || photosBusy}>
+        {isMemory && service.supportsOutbox && (
+          <button type="button" className="secondary"
+            disabled={busy || photosBusy || conflict || service.hasPendingSave || failedPhotos.length > 0}
+            onClick={() => void run(async () => {
+              clearTimeout(draftTimer.current);
+              await saving.current;
+              const photos = [...(form.photos ?? []), ...queuedPhotos.map(({ photo }) => photo)];
+              await service.queueSave({ ...form, photos }, visibility, base,
+                queuedPhotos.map(({ photo, envelope }) => ({ fileId: photo.fileId, envelope })));
+              try { service.storage.remove(draftSlot); } catch { /* The queued copy is already durable. */ }
+              done();
+            }, "已保存在本机，等待同步")}>
+            先存本机，稍后同步
+          </button>
+        )}
+        <button className="primary" disabled={busy || photosBusy || conflict || service.hasPendingSave || queuedPhotos.length > 0}>
           {busy
             ? "正在收藏…"
             : isRelationship

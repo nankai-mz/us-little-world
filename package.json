@@ -3,11 +3,12 @@
   "version": "1.2.11",
   "private": true,
   "type": "module",
-  "description": "Us · 我们的小世界 — 微信双人私密小程序",
+  "description": "Us · 我们的小世界 — 双人私密 Web 空间",
   "scripts": {
     "dev": "vite --host 127.0.0.1 --port 5173",
     "build": "npm run typecheck && vite build && npm run build:mini && npm run build:cloud",
     "typecheck": "tsc --noEmit",
+    "typecheck:web": "tsc --project tsconfig.web.json",
     "test": "vitest run --reporter=default --reporter=json --outputFile=artifacts/tests-report.json",
     "build:mini": "node scripts/build-mini.mjs",
     "build:cloud": "node scripts/build-cloud.mjs",
@@ -18,7 +19,12 @@
     "release": "npm test && npm run build && npm run check:mini && npm run check:sdk && npm run preflight && pwsh -File scripts/package.ps1",
     "preview": "vite preview --host 127.0.0.1 --port 5173",
     "build:web": "vite build",
-    "serve:web": "node --env-file-if-exists=.env.web scripts/serve-web.mjs"
+    "package:web": "npm run build:web && node scripts/package-web.mjs",
+    "check:web": "npm run typecheck:web && npm test && npm run build:web",
+    "test:web:e2e": "npm run build:web && playwright test",
+    "serve:web": "node --env-file-if-exists=.env.web scripts/serve-web.mjs",
+    "backup:web": "node scripts/backup-web.mjs",
+    "recover:web": "node scripts/recover-web.mjs"
   },
   "engines": {
     "node": ">=22.12.0"
@@ -29,11 +35,13 @@
     "@noble/hashes": "2.4.0",
     "@scure/base": "2.0.0",
     "fast-text-encoding": "1.0.6",
+    "fflate": "0.8.3",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
+    "@playwright/test": "1.60.0",
     "@resvg/resvg-js": "^2.6.2",
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",

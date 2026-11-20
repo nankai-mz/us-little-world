@@ -1,0 +1,23 @@
+[Unit]
+Description=Us private web space
+After=network.target
+
+[Service]
+Type=simple
+User=us-web
+Group=us-web
+WorkingDirectory=/opt/us-web/current
+EnvironmentFile=/etc/us-web.env
+ExecStart=/usr/bin/node server.mjs
+Restart=on-failure
+RestartSec=3
+StateDirectory=us-web
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

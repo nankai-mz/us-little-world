@@ -1,0 +1,19 @@
+[Unit]
+Description=Create and check an encrypted Us Web database snapshot
+After=us-web.service
+
+[Service]
+Type=oneshot
+User=us-web
+Group=us-web
+WorkingDirectory=/opt/us-web/current
+EnvironmentFile=/etc/us-web.env
+ExecStart=/usr/bin/node scripts/maintain-web.mjs backup
+ExecStart=/usr/bin/node scripts/maintain-web.mjs check
+StateDirectory=us-web us-web-backups
+StateDirectoryMode=0700
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes

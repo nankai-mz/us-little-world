@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": { "types": ["node"] },
+  "include": ["src/core", "src/server/web-entry.ts", "web", "e2e", "playwright.config.ts", "vite.config.ts"]
+}

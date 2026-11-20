@@ -2,11 +2,19 @@ import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react
 import { App } from "./App";
 import { createHostedService } from "./platform";
 import { forgetUnlock } from "./rememberedUnlock";
+import { setOfflineAccount } from "./cipherCache";
+import { useWebInstall } from "./WebInstall";
 
 interface WebsiteSession {
   account: string | null;
   owner: boolean;
   error?: { message: string };
+}
+const sessionSignalKey = "us.web.sessionChanged";
+
+function signalSessionChanged() {
+  try { localStorage.setItem(sessionSignalKey, crypto.randomUUID()); }
+  catch { /* Tabs check the server again when they regain focus. */ }
 }
 
 async function sessionRequest(path: string, data?: object) {
@@ -21,16 +29,25 @@ async function sessionRequest(path: string, data?: object) {
 }
 
 export function HostedWeb() {
+  const installation = useWebInstall();
   const [session, setSession] = useState<WebsiteSession | null>(null);
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(true);
   const clearSession = useCallback(() => {
+    setOfflineAccount(null);
     setSession(null);
     setPassword("");
   }, []);
   const account = session?.account;
+  const storageAvailable = useMemo(() => {
+    if (!account) return false;
+    try {
+      localStorage.getItem(`us.web.${account}.vault`);
+      return true;
+    } catch { return false; }
+  }, [account]);
   const service = useMemo(() => account ? createHostedService(account, () => {
     void forgetUnlock(account).catch(() => {});
     clearSession();
@@ -38,7 +55,10 @@ export function HostedWeb() {
   useEffect(() => {
     let active = true;
     sessionRequest("/api/session").then((value) => {
-      if (active) setSession(value);
+      if (active) {
+        if (!value.account) setOfflineAccount(null);
+        setSession(value);
+      }
     }).catch(() => {
       if (active) setError("暂时无法连接网站，请刷新后再试。");
     }).finally(() => {
@@ -46,30 +66,78 @@ export function HostedWeb() {
     });
     return () => { active = false; };
   }, []);
+  useEffect(() => {
+    let active = true;
+    let check = 0;
+    const syncSession = (cookieChanged = false) => {
+      const request = ++check;
+      void sessionRequest("/api/session").then((current) => {
+        if (!active || request !== check || (!cookieChanged && current.account === (account ?? null))) return;
+        if (!account && !current.account) return;
+        service?.lock();
+        if (account) void forgetUnlock(account).catch(() => {});
+        setPassword("");
+        setOfflineAccount(null);
+        setSession(current);
+      }).catch(() => {});
+    };
+    const onFocus = () => { if (!document.hidden) syncSession(); };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === sessionSignalKey || event.key === null) syncSession(true);
+    };
+    window.addEventListener("storage", onStorage);
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      active = false;
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
+  }, [account, service]);
   async function signIn(event: FormEvent) {
     event.preventDefault();
     setBusy(true);
     setError("");
     try {
-      setSession(await sessionRequest("/api/login", { name, password }));
+      const signedIn = await sessionRequest("/api/login", { name, password });
+      setOfflineAccount(null);
+      setSession(signedIn);
       setPassword("");
+      signalSessionChanged();
     } catch (failure) {
       setError((failure as Error).message);
     } finally {
       setBusy(false);
     }
   }
+  async function signOut() {
+    service?.lock();
+    setOfflineAccount(null);
+    if (account) await forgetUnlock(account).catch(() => {});
+    await sessionRequest("/api/logout", {});
+    clearSession();
+    signalSessionChanged();
+  }
+  if (account && !storageAvailable) return (
+    <main className="welcome">
+      <div className="welcome-form">
+        <h2>浏览器本机存储不可用</h2>
+        <p>请允许这个网站使用本机存储，再刷新页面。密钥库需要保存在当前浏览器。</p>
+        {error && <p role="alert" className="error-text">{error}</p>}
+        <button className="secondary full" onClick={() =>
+          void signOut().catch((failure: Error) => setError(failure.message))
+        }>退出网站账号</button>
+      </div>
+    </main>
+  );
   if (account && service) return (
     <App key={account} hosted={{
       account,
       service,
       owner: !!session?.owner,
-      signOut: async () => {
-        service.lock();
-        await forgetUnlock(account).catch(() => {});
-        await sessionRequest("/api/logout", {});
-        clearSession();
-      },
+      signOut,
+      installation,
     }} />
   );
   return (
