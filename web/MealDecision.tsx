@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { today } from "../src/core/date";
 import { secureChoice } from "../src/core/domain";
 import {
   archiveMealPlan, emptyMealPlan, mealExclusion, mealMemory, mealRecord, meals, preferences, rankMeals, updateMealPlan,
@@ -17,19 +16,22 @@ function MealBallot({ plan, userId, members, act, busy }: {
   plan: MealPlan; userId: string; members: string[]; act: Act; busy: boolean;
 }) {
   const mine = plan.ballots[userId];
-  const [choices, setChoices] = useState<Partial<Record<string, MealPreference>>>(mine?.choices ?? {});
+  const [draft, setDraft] = useState<{ version: number; choices: Partial<Record<string, MealPreference>> }>();
+  const choices = draft?.choices ?? mine?.choices ?? {};
   const identity = { round: plan.round, version: plan.version, previousVote: mine?.revision ?? 0 };
   return (
     <form onSubmit={(event) => {
       event.preventDefault();
-      act({ type: "vote", ...identity, choices: choices as Record<string, MealPreference> });
+      const available = Object.fromEntries(plan.candidates.flatMap(({ id }) => choices[id] ? [[id, choices[id]!]] : []));
+      act({ type: "vote", ...identity, choices: available }, () => setDraft(undefined));
     }}>
       <h3>我的偏好</h3>
+      {draft && draft.version !== plan.version && <p role="status">候选或条件有更新，已保留仍在列表中的选择。请核对本轮偏好后提交。</p>}
       {plan.candidates.map((candidate) => (
         <label className="field" key={candidate.id}>
           <span>{candidate.name}{mealExclusion(plan, candidate, members) && ` · ${mealExclusion(plan, candidate, members)}`}</span>
           <select aria-label={`${candidate.name}偏好`} value={choices[candidate.id] ?? ""} required disabled={busy}
-            onChange={(event) => setChoices({ ...choices, [candidate.id]: event.target.value as MealPreference })}>
+            onChange={(event) => setDraft({ version: plan.version, choices: { ...choices, [candidate.id]: event.target.value as MealPreference } })}>
             <option value="">选择偏好</option>
             {Object.entries(preferences).map(([key, label]) => <option key={key} value={key}>{label}</option>)}
           </select>
@@ -37,7 +39,7 @@ function MealBallot({ plan, userId, members, act, busy }: {
       ))}
       <button className="primary" disabled={busy}>提交偏好</button>
       {mine?.choices && <button type="button" className="text-button" disabled={busy}
-        onClick={() => act({ type: "withdraw", ...identity })}>撤回我的偏好</button>}
+        onClick={() => act({ type: "withdraw", ...identity }, () => setDraft(undefined))}>撤回我的偏好</button>}
     </form>
   );
 }
@@ -91,7 +93,8 @@ function MealCandidates({ plan, userId, act, busy }: { plan: MealPlan; userId: s
           setName(""); setPrice(""); setTags("");
         });
       }}>
-        <label className="field"><span>菜品或餐厅</span><input required maxLength={80} value={name} onChange={(e) => setName(e.target.value)} /></label>
+        <label className="field"><span>菜品或餐厅</span><input required value={name}
+          onChange={(e) => setName([...e.target.value].slice(0, 40).join(""))} /></label>
         <label className="field"><span>预计价格（元，可留空）</span>
           <input type="number" min="0" max="99999" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} />
         </label>
@@ -108,7 +111,7 @@ export function MealDecision({ service, busy, run, open }: {
   run: <T>(action: () => Promise<T>, success?: string) => Promise<T | undefined>;
   open: (entry: Entry) => void;
 }) {
-  const [date, setDate] = useState(today);
+  const [date, setDate] = useState(() => service.day);
   const [meal, setMeal] = useState<Meal>("晚餐");
   const entry = mealRecord(service, date, meal);
   const plan = entry?.data.mealPlan ?? emptyMealPlan(meal);
@@ -116,6 +119,8 @@ export function MealDecision({ service, busy, run, open }: {
   const writable = !busy && members.length === 2 && service.space?.status === "active";
   const bothVoted = members.length === 2 && members.every((id) =>
     plan.ballots[id]?.version === plan.version && !!plan.ballots[id]?.choices);
+  const submitted = (id: string) => plan.ballots[id]?.version === plan.version && !!plan.ballots[id]?.choices;
+  const partnerVoted = members.some((id) => id !== service.userId && submitted(id));
   const ranked = rankMeals(plan, members);
   const selected = plan.candidates.find((candidate) => candidate.id === plan.selectedId);
   const saved = entry && mealMemory(service, entry);
@@ -140,9 +145,11 @@ export function MealDecision({ service, busy, run, open }: {
         <MealRules key={key}
           plan={plan} userId={service.userId} act={action} busy={!writable} />
         <MealCandidates key={key} plan={plan} userId={service.userId} act={action} busy={!writable} />
-        {plan.candidates.length > 0 && <MealBallot key={`${key}:${plan.version}:${plan.ballots[service.userId]?.revision ?? 0}`}
+        {plan.candidates.length > 0 && <MealBallot key={key}
           plan={plan} userId={service.userId} members={members} act={action} busy={!writable} />}
-        {plan.candidates.length > 0 && !bothVoted && <p>等两个人都提交偏好，再查看共同选择。候选或条件变化后需要重新投票。</p>}
+        {plan.candidates.length > 0 && !bothVoted && <p>{submitted(service.userId)
+          ? "你已提交偏好，等待对方。"
+          : partnerVoted ? "对方已提交，轮到你选择偏好。" : "双方提交偏好后，可查看共同选择。"} 候选或条件变化后需要重新投票。</p>}
         {bothVoted && (ranked.length ? (
           <section aria-label="共同接受的候选">
             <h3>共同接受的候选</h3>

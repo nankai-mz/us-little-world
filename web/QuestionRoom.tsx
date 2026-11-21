@@ -2,7 +2,6 @@ import { useEffect, useState } from "react";
 import { BookOpen, Check, Coffee, Send } from "lucide-react";
 import type { UsService } from "../src/core/service";
 import type { Entry } from "../src/core/types";
-import { today } from "../src/core/date";
 import { secureChoice } from "../src/core/domain";
 import {
   dailyQuestion,
@@ -22,12 +21,14 @@ export function QuestionRoom({
   service,
   entries,
   mode,
+  day,
   busy,
   perform,
 }: {
   service: UsService;
   entries: Entry[];
   mode: string;
+  day: string;
   busy: boolean;
   perform: (
     operation: () => Promise<void>,
@@ -39,8 +40,8 @@ export function QuestionRoom({
   const [answer, setAnswer] = useState("");
   const [custom, setCustom] = useState("");
   const defaultContext = (): QuestionContext => ({
-    title: mode === "quiz" ? dailyQuiz().title : dailyQuestion().text,
-    date: today(),
+    title: mode === "quiz" ? dailyQuiz(day).title : dailyQuestion(day).text,
+    date: day,
     kind: mode === "quiz" ? "quiz" : "question",
   });
   const [context, setContext] = useState<QuestionContext>(defaultContext);
@@ -50,6 +51,9 @@ export function QuestionRoom({
     setCategory("全部");
     setAnswer("");
   }, [mode]);
+  useEffect(() => {
+    if (view === "answer" && !answer && context.date !== day) setContext(defaultContext());
+  }, [day]);
   const record = entries.find(
     (entry) =>
       entry.data.kind === context.kind &&
@@ -180,7 +184,7 @@ export function QuestionRoom({
                     );
                     setContext({
                       title: item.text,
-                      date: today(),
+                      date: day,
                       kind: "question",
                     });
                     setAnswer("");
@@ -251,7 +255,7 @@ export function QuestionRoom({
                       onClick={() => {
                         setContext({
                           title: item.title,
-                          date: today(),
+                          date: day,
                           kind: "quiz",
                         });
                         setView("answer");

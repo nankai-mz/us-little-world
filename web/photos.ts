@@ -1,5 +1,6 @@
 import {
   fitPhoto,
+  MAX_PHOTO_BYTES,
   MAX_SOURCE_PHOTO_BYTES,
 } from "../src/core/photos";
 import { AppError } from "../src/core/types";
@@ -38,16 +39,23 @@ export async function prepareBrowserPhoto(file: File): Promise<Blob> {
             "当前浏览器无法处理照片，请更新浏览器后重试",
           );
         context.drawImage(bitmap, 0, 0, width, height);
-        const blob = await new Promise<Blob>((resolve, reject) =>
+        const encode = (type: string) => new Promise<Blob>((resolve, reject) =>
           canvas.toBlob(
             (value) =>
               value
                 ? resolve(value)
                 : reject(new AppError("INVALID_IMAGE", "照片压缩暂时失败")),
-            mime,
+            type,
             quality / 100,
           ),
         );
+        let blob: Blob;
+        if (mime === "image/png" && quality === 82) {
+          blob = await encode("image/png");
+          if (blob.size > MAX_PHOTO_BYTES) blob = await encode("image/webp");
+        } else {
+          blob = await encode(mime === "image/png" ? "image/webp" : mime);
+        }
         return { value: blob, size: blob.size, mime: blob.type, width, height };
       },
       { alwaysEncode: true },

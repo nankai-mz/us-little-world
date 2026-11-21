@@ -20,6 +20,12 @@ export default defineConfig({
     outDir: "dist",
     emptyOutDir: true,
     manifest: true,
-    chunkSizeWarningLimit: 700,
+    rollupOptions: {
+      output: {
+        manualChunks(id) {
+          if (/\/node_modules\/(react|react-dom|scheduler)\//.test(id)) return "react-runtime";
+        },
+      },
+    },
   },
 });

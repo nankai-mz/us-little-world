@@ -1,0 +1,78 @@
+@media print {
+  body:has(.book-print) .content > :not(.memory-book),
+  .book-controls { display: none !important; }
+  .memory-book { display: block; }
+  .book-cover { min-height: 120mm; display: grid; align-content: center; margin: 0; }
+  .book-cover, .book-page { padding: 8mm; }
+  .book-page { break-before: page; margin: 0; }
+  .book-page h3 { break-after: avoid; }
+  .book-page figure { break-inside: avoid; }
+  .book-page img { max-height: 170mm; }
+  body {
+    padding: 0 !important;
+    background: #fff;
+    color: #333;
+  }
+  .sidebar,
+  .topbar,
+  .page-heading,
+  .toolbar,
+  .mobile-nav,
+  .app-footer,
+  .report-actions,
+  .toast,
+  .report-page > .fineprint,
+  .memory-heart {
+    display: none !important;
+  }
+  .app-shell > main {
+    margin: 0;
+    width: 100%;
+  }
+  .content {
+    padding: 0;
+  }
+  .report-cover {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .report-page {
+    width: 100%;
+  }
+  .stats-grid {
+    grid-template-columns: repeat(6, 1fr);
+  }
+  .memory-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .memory-card {
+    break-inside: avoid;
+  }
+  .memory-open > img {
+    height: 180px;
+  }
+  .memory-copy h3 {
+    white-space: normal;
+  }
+  .memory-copy p {
+    display: block;
+  }
+  .report-cover .pills {
+    display: none;
+  }
+  .memory-copy {
+    padding: 20px;
+  }
+  .memory-copy h3 {
+    font-size: 14px;
+  }
+  .memory-copy p {
+    font-size: 12px;
+  }
+  .meta {
+    font-size: 12px;
+  }
+  .meta > span:last-child {
+    font-size: 12px;
+  }
+}

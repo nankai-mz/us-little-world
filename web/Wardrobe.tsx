@@ -1,10 +1,9 @@
 import { useState, type ReactNode } from "react";
-import { b64 } from "../src/core/crypto";
 import type { UsService } from "../src/core/service";
 import { AppError, type Attachment, type Entry } from "../src/core/types";
 import {
   addWardrobeItem, privateWardrobe, publishWardrobe, respondToWardrobe, suggestWardrobe,
-  visibleItemId, wardrobeSelection, wardrobeSlots, wardrobeSuggestion, type WardrobeSlot,
+  visibleItemId, wardrobeNameLimit, wardrobeSelection, wardrobeSlots, wardrobeSuggestion, wardrobeWeatherLimit, type WardrobeSlot,
 } from "../src/core/wardrobe";
 import { prepareBrowserPhoto } from "./photos";
 
@@ -32,8 +31,8 @@ function WardrobeShareForm({ service, items, selection, busy, run }: {
           共享 {item.data.title}
         </label>
       ))}
-      <label className="field"><span>天气备注（可留空）</span><input maxLength={80} value={weather} disabled={busy}
-        onChange={(e) => setWeather(e.target.value)} /></label>
+      <label className="field"><span>天气备注（可留空）</span><input value={weather} disabled={busy}
+        onChange={(e) => setWeather([...e.target.value].slice(0, wardrobeWeatherLimit).join(""))} /></label>
       <button className="primary" disabled={busy || (!selected.length && !published?.items.length)}>更新共享衣物</button>
       {!!published?.items.length && <button type="button" className="text-button" disabled={busy}
         onClick={() => void run(() => publishWardrobe(service, [], "", edition), "衣物共享已撤回")}>撤回全部共享</button>}
@@ -101,19 +100,17 @@ export function Wardrobe({ service, busy, run, photo }: {
           event.preventDefault();
           void run(async () => {
             const session = service.secrets;
-            let attachment: Attachment | undefined;
-            if (file) {
+            await addWardrobeItem(service, name, slot, file ? async () => {
               const image = await prepareBrowserPhoto(file);
-              const bytes = b64(new Uint8Array(await image.arrayBuffer()));
+              const bytes = new Uint8Array(await image.arrayBuffer());
               if (!session || service.secrets !== session) throw new AppError("LOCKED", "请先解锁");
-              attachment = await service.addPhoto(bytes, image.type, file.name, "private");
-            }
-            await addWardrobeItem(service, name, slot, attachment);
+              return service.addPhoto(bytes, image.type, file.name, "private");
+            } : undefined);
             setName(""); setFile(undefined); setInputVersion((value) => value + 1);
           }, "衣物已保存到私人衣橱");
         }}>
-          <label className="field"><span>衣物名称</span><input value={name} required maxLength={64} disabled={!canWrite}
-            onChange={(e) => setName(e.target.value)} /></label>
+          <label className="field"><span>衣物名称</span><input value={name} required disabled={!canWrite}
+            onChange={(e) => setName([...e.target.value].slice(0, wardrobeNameLimit).join(""))} /></label>
           <label className="field"><span>衣物类别</span><select value={slot} disabled={!canWrite}
             onChange={(e) => setSlot(e.target.value as WardrobeSlot)}>{wardrobeSlots.map((value) => <option key={value}>{value}</option>)}</select></label>
           <label className="field"><span>私人衣物照片（可选）</span><input key={inputVersion} type="file" disabled={!canWrite}

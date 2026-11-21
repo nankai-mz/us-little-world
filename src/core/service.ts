@@ -21,7 +21,7 @@ import {
   acceptTransfer,
   b64,
   createTransfer,
-  decryptPhoto,
+  decryptPhotoBytes,
   decryptRecord,
   deriveVaultKey,
   fingerprint,
@@ -39,7 +39,7 @@ import {
   unlockVault,
   type VaultKey,
 } from "./crypto";
-import { addDays, dayNumber, today } from "./date";
+import { addDays, dayNumber, spaceDay, today } from "./date";
 import { canOpenCapsule, newPet, petAction, QUESTIONS, SPACE_MEMBER_NAMES } from "./domain";
 import { API_PROTOCOL, RECORD_RECEIPT_TTL_MS, type ConnectionStatus } from "./protocol";
 import { PHOTO_DOWNLOAD_PART_SIZE, PHOTO_UPLOAD_PART_SIZE } from "./photos";
@@ -60,13 +60,23 @@ function unconfirmedRecordWrite(error: unknown) {
   return error instanceof AppError && ["TIMEOUT", "NETWORK_ERROR", "INVALID_RESPONSE", "WRITE_UNCONFIRMED"].includes(error.code);
 }
 type PendingSave = { operationId: string; submittedAt: number; record: CipherRecord; expectedRevision: number; photoRefs?: string[] };
+type Bootstrap = { userId: string; space: Space | null; initialDevicePending?: boolean; atomicEnrollment?: boolean };
+type WebSetup = NonNullable<Secrets["webSetup"]>;
 
 export class UsService {
   displayNames: ReadonlyMap<string, string> = new Map();
   private profileGeneration = 0;
   private syncSnapshot?: {
-    scope: string; rows: Map<string, CipherRecord>; cursor: string; cachedAt: number; writeKeyVersion?: number;
+    scope: string; rows: Map<string, CipherRecord>; cursor: string; cachedAt: number; writeKeyVersion?: number; binaryPhotos: boolean;
   };
+  private decodedRecords = new Map<string, { row: CipherRecord; key: string | undefined; entry?: Entry }>();
+  private decodedKeys?: { personalKey: string; shared: Record<string, string> };
+  private photoRequests = new Map<string, Promise<Uint8Array>>();
+  private binaryPhotos = false;
+  private recentPhotoEnvelopes = new Map<string, Envelope>();
+  private activeSource?: Entry[];
+  private activeEntries: Entry[] = [];
+  initialDevicePending = false;
   secrets: Secrets | null = null;
   space: Space | null = null;
   entries: Entry[] = [];
@@ -86,10 +96,14 @@ export class UsService {
     public transport: Transport,
     public storage: StorageAdapter,
     public rng: RandomSource,
-    private readonly features: { recordReceipts?: boolean; managedPhotos?: boolean; cipherCache?: CipherCache; outbox?: RecordOutbox } = {},
+    private readonly features: { recordReceipts?: boolean; managedPhotos?: boolean; cipherCache?: CipherCache;
+      outbox?: RecordOutbox; enrollmentLock?: <T>(task: () => Promise<T>) => Promise<T | undefined> } = {},
   ) {}
   get userId() {
     return this.secrets?.userId || "";
+  }
+  get day() {
+    return this.transport.webDeviceChallenges ? spaceDay() : today();
   }
   get ready() {
     return (
@@ -99,7 +113,11 @@ export class UsService {
     );
   }
   get active() {
-    return this.entries.filter((e) => !e.deletedAt);
+    if (this.activeSource !== this.entries) {
+      this.activeSource = this.entries;
+      this.activeEntries = this.entries.filter((e) => !e.deletedAt);
+    }
+    return this.activeEntries;
   }
   get hasPrivateAccess() {
     return !!this.secrets && !this.secrets.sharedOnly;
@@ -109,12 +127,15 @@ export class UsService {
       throw new AppError("PRIVATE_KEY_REQUIRED", "请从原设备导出的加密备份恢复私人记录");
   }
   get vault(): Vault | null {
-    const v = this.storage.get("vault");
+    const v = (this.transport.webDeviceChallenges ? this.storage.get("webSetupVault") : null) ?? this.storage.get("vault");
     try {
       return v ? JSON.parse(v) : null;
     } catch {
       return null;
     }
+  }
+  get enrollmentPending() {
+    return this.transport.webDeviceChallenges === true && !!this.storage.get("webSetupVault");
   }
   async persistSecrets() {
     const access = this.vaultKey;
@@ -201,10 +222,7 @@ export class UsService {
       throw new AppError("PRIVATE_KEY_REQUIRED", "此备份只包含共同空间访问，请使用原设备导出的加密备份");
     const original = this.secrets;
     const lockSerial = this.lockSerial;
-    const boot = await this.transport.call<{
-      userId: string;
-      space: Space | null;
-    }>("bootstrap");
+    const boot = await this.transport.call<Bootstrap>("bootstrap");
     if (
       boot.userId !== recovered.userId ||
       boot.space?.id !== recovered.spaceId
@@ -238,15 +256,23 @@ export class UsService {
     if (this.ready) await this.refresh();
   }
   async bootstrap() {
-    const boot = await this.transport.call<{
-      userId: string;
-      space: Space | null;
-    }>("bootstrap");
+    const boot = await this.transport.call<Bootstrap>("bootstrap");
     if (this.secrets && this.secrets.userId !== boot.userId) {
       this.lock();
       throw new AppError("IDENTITY_MISMATCH", "恢复包不属于当前账号");
     }
+    if (this.secrets?.webSetup && this.transport.webDeviceChallenges) {
+      if (!boot.atomicEnrollment) throw new AppError("PROTOCOL_MISMATCH", "当前发布版本无法继续这次配对，请使用支持首次登记恢复的版本");
+      const secrets = this.secrets;
+      await this.withEnrollmentLock(async () => {
+        if (this.secrets !== secrets) throw new AppError("LOCKED", "请先解锁");
+        await this.completeWebSetup(secrets);
+        return true;
+      });
+      return;
+    }
     this.space = boot.space;
+    this.initialDevicePending = !!boot.initialDevicePending;
     if (this.space && ["closed", "purging"].includes(this.space.status)) {
       this.lock();
       throw new AppError("SPACE_CLOSED", "这个空间已经关闭，云端访问已停止");
@@ -270,19 +296,30 @@ export class UsService {
     demo = false,
   ) {
     validateNewPassword(password);
+    if (this.transport.webDeviceChallenges) return this.beginWebSetup(password, { kind: "create", title, date: startDate });
     const boot = await this.transport.call<{
       userId: string;
       space: Space | null;
     }>("bootstrap");
     if (boot.space?.status === "active")
       throw new AppError("ALREADY_BOUND", "当前账号已有空间，请恢复密钥");
-    this.setVaultKey(await deriveVaultKey(password, b64(await this.rng(16))));
-    this.secrets = await newSecrets(this.rng, boot.userId);
-    this.space = await this.transport.call<Space>("createSpace");
+    const secrets = await newSecrets(this.rng, boot.userId);
+    const access = await deriveVaultKey(password, b64(await this.rng(16)));
+    try {
+      this.space = await this.transport.call<Space>("createSpace");
+    } catch (error) {
+      access.key.fill(0);
+      throw error;
+    }
+    this.secrets = secrets;
+    this.setVaultKey(access);
     this.secrets.spaceId = this.space.id;
     this.secrets.spaceKeys["1"] = b64(await this.rng(32));
-    const recovery = await this.persistSecrets();
-    await this.registerDevice();
+    const recovery = await this.persistInitialDevice();
+    await this.seedInitialSpace(title, startDate, demo);
+    return recovery;
+  }
+  private async seedInitialSpace(title: string, startDate: string, demo = false) {
     await this.save({
       kind: "anniversary",
       title,
@@ -292,16 +329,16 @@ export class UsService {
       yearly: true,
     });
     await this.save(
-      { kind: "pet", title: "糯米的小屋", date: today(), pet: newPet() },
+      { kind: "pet", title: "糯米的小屋", date: this.day, pet: newPet() },
       "shared",
       undefined,
-      hashText(this.space.id + "/pet"),
+      hashText(this.space!.id + "/pet"),
     );
     if (demo) await this.seedDemo();
-    return recovery;
   }
   async join(password: string, token: string) {
     validateNewPassword(password);
+    if (this.transport.webDeviceChallenges) return this.beginWebSetup(password, { kind: "join", token: token.trim() });
     const { userId } = await this.transport.call<{ userId: string }>(
       "bootstrap",
     );
@@ -318,36 +355,128 @@ export class UsService {
     this.secrets = secrets;
     this.setVaultKey(access);
     this.space = space;
-    const recoveryKey = await this.persistSecrets();
-    await this.registerDevice();
+    return this.persistInitialDevice();
+  }
+  private async withEnrollmentLock<T>(work: () => Promise<T>) {
+    const lock = this.features.enrollmentLock;
+    if (!lock) return work();
+    const value = await lock(work);
+    if (value === undefined) throw new AppError("ENROLLMENT_BUSY", "另一标签页正在完成首次登记，请稍后重试");
+    return value;
+  }
+  private async beginWebSetup(password: string, setup: WebSetup) {
+    return this.withEnrollmentLock(async () => {
+      const generation = this.lockSerial;
+      if (this.storage.get("webSetupVault"))
+        throw new AppError("ENROLLMENT_PENDING", "请用本机口令继续原来的配对");
+      if (setup.kind === "create") dayNumber(setup.date);
+      const boot = await this.transport.call<Bootstrap>("bootstrap");
+      if (!boot.atomicEnrollment) throw new AppError("PROTOCOL_MISMATCH", "当前发布版本无法安全完成首次登记");
+      // For join, check the token first so an invalid attempt does not replace any local keys.
+      const spaceId = setup.kind === "join"
+        ? (await this.transport.call<{ spaceId: string }>("inspectInvitation", { token: setup.token })).spaceId
+        : await randomId(this.rng);
+      if (boot.space?.status === "active") throw new AppError("ALREADY_BOUND", "当前账号已有空间，请恢复密钥");
+      const secrets = await newSecrets(this.rng, boot.userId, spaceId);
+      if (setup.kind === "create") secrets.spaceKeys["1"] = b64(await this.rng(32));
+      secrets.webSetup = setup;
+      const access = await deriveVaultKey(password, b64(await this.rng(16)));
+      try {
+        const { vault } = await sealVaultWithKey(secrets, access, this.rng);
+        if (generation !== this.lockSerial) throw new AppError("LOCKED", "会话已改变，请重新开始配对");
+        this.storage.set("webSetupVault", JSON.stringify(vault));
+        this.setVaultKey({ salt: access.salt, key: access.key.slice() });
+        this.secrets = secrets;
+        return await this.completeWebSetup(secrets);
+      } catch (error) {
+        if (this.secrets === secrets) this.lock();
+        throw error;
+      } finally {
+        access.key.fill(0);
+      }
+    });
+  }
+  private async completeWebSetup(secrets: Secrets) {
+    const setup = secrets.webSetup!;
+    const access = this.vaultKey!;
+    const current = () => this.secrets === secrets && this.vaultKey === access;
+    let space: Space;
+    try {
+      const claim = await this.deviceRegistration(secrets);
+      if (!current()) throw new AppError("LOCKED", "会话已改变，请重新解锁");
+      space = await this.transport.call<Space>(setup.kind === "create" ? "createSpace" : "joinSpace", {
+        ...claim, initialDevice: true, ...(setup.kind === "join" ? { token: setup.token } : {}),
+      });
+    } catch (error) {
+      if (current() && error instanceof AppError &&
+        ["INVITE_EXPIRED", "INVALID_INVITE", "SPACE_FULL", "SPACE_ID_IN_USE", "ALREADY_BOUND"].includes(error.code))
+        this.storage.remove("webSetupVault");
+      throw error;
+    }
+    if (!current()) throw new AppError("LOCKED", "会话已改变，请重新解锁");
+    if (space.id !== secrets.spaceId) throw new AppError("SPACE_MISMATCH", "服务端返回了不同的空间，请重新解锁核对");
+    this.space = space;
+    this.initialDevicePending = false;
+    if (setup.kind === "create") {
+      await this.refresh();
+      if (!current()) throw new AppError("LOCKED", "会话已改变，请重新解锁");
+      if (!this.active.some(({ data }) => data.kind === "anniversary" && data.category === "relationship"))
+        await this.save({ kind: "anniversary", title: setup.title, body: "我 & 你", date: setup.date, category: "relationship", yearly: true },
+          "shared", undefined, hashText(space.id + "/relationship"));
+      if (!current()) throw new AppError("LOCKED", "会话已改变，请重新解锁");
+      if (!this.active.some(({ data }) => data.kind === "pet"))
+        await this.save({ kind: "pet", title: "糯米的小屋", date: this.day, pet: newPet() },
+          "shared", undefined, hashText(space.id + "/pet"));
+    }
+    if (!current()) throw new AppError("LOCKED", "会话已改变，请重新解锁");
+    const { webSetup: _setup, ...completed } = secrets;
+    const { vault, recoveryKey } = await sealVaultWithKey(completed, access, this.rng);
+    if (!current()) throw new AppError("LOCKED", "会话已改变，请重新解锁");
+    this.storage.set("vault", JSON.stringify(vault));
+    this.storage.remove("webSetupVault");
+    delete secrets.webSetup;
     return recoveryKey;
   }
-  async setUpDevice(password: string) {
+  async setUpDevice(password: string, initial?: { title: string; date: string }) {
     if (this.vault)
       throw new AppError("LOCAL_KEYS_EXIST", "此浏览器已有密钥，请使用本机口令解锁");
     validateNewPassword(password);
-    const { userId, space } = await this.transport.call<{ userId: string; space: Space | null }>("bootstrap");
+    const { userId, space, initialDevicePending } = await this.transport.call<Bootstrap>("bootstrap");
     if (space?.status !== "active" || !space.members.includes(userId))
       throw new AppError("MEMBER_REQUIRED", "当前账号没有可登记设备的双人空间");
     const secrets = await newSecrets(this.rng, userId);
     secrets.spaceId = space.id;
-    secrets.sharedOnly = true;
+    const initialOwner = initialDevicePending && space.members[0] === userId && space.keyVersion === 1;
+    if (initialOwner) secrets.spaceKeys["1"] = b64(await this.rng(32));
+    if (!initialDevicePending) secrets.sharedOnly = true;
     this.setVaultKey(await deriveVaultKey(password, b64(await this.rng(16))));
     this.secrets = secrets;
     this.space = space;
+    const recoveryKey = await this.persistInitialDevice();
+    if (initialOwner) await this.seedInitialSpace(initial?.title ?? "我们的小世界", initial?.date ?? this.day);
+    return initialOwner ? recoveryKey : undefined;
+  }
+  private async persistInitialDevice() {
     try {
-      await this.persistSecrets();
+      const recoveryKey = await this.persistSecrets();
       await this.registerDevice();
+      this.initialDevicePending = false;
+      return recoveryKey;
     } catch (error) {
       this.lock();
       throw error;
     }
   }
   async registerDevice() {
-    if (!this.secrets || !this.space) return;
-    await this.registerKeys(this.secrets);
+    const session = this.secrets;
+    if (!session || !this.space) return;
+    await this.registerKeys(session);
+    if (this.secrets === session && !session.sharedOnly) this.initialDevicePending = false;
   }
   private async registerKeys(secrets: Secrets, source?: { deviceId: string; signingSecret: string }) {
+    return this.transport.call("registerDevice", await this.deviceRegistration(secrets, source));
+  }
+  private async deviceRegistration(secrets: Secrets, source?: { deviceId: string; signingSecret: string }) {
     const device: WebDevice = {
       spaceId: secrets.spaceId,
       id: secrets.deviceId,
@@ -355,14 +484,14 @@ export class UsService {
       ...(secrets.sharedOnly ? { sharedOnly: true } : {}),
       label: "我的设备",
     };
-    if (!this.transport.webDeviceChallenges) return this.transport.call("registerDevice", device);
+    if (!this.transport.webDeviceChallenges) return device;
     const { nonce } = await this.transport.call<{ nonce: string }>("deviceChallenge", {
       spaceId: device.spaceId, id: device.id,
     });
     const recovery = !secrets.sharedOnly && secrets.recoveryKey
       ? { userId: secrets.userId, key: secrets.recoveryKey } : undefined;
     const proof = signWebDevice(device, nonce, secrets.signingSecret, recovery, source);
-    return this.transport.call("registerDevice", { ...device, proof });
+    return { ...device, proof };
   }
   async call<T>(action: string, data: Record<string, unknown> = {}) {
     if (!this.secrets || !this.space) throw new AppError("LOCKED", "请先解锁");
@@ -391,11 +520,12 @@ export class UsService {
     const scope = cipherSnapshotScope(session);
     const saved = this.syncSnapshot?.scope === scope ? this.syncSnapshot : undefined;
     const cache = this.features.cipherCache;
-    let rows = new Map(saved?.rows);
+    let rows = saved?.rows ?? new Map<string, CipherRecord>();
     let cursor = saved?.cursor;
     let cachedAt = saved?.cachedAt ?? 0;
     const writeKeyVersion = space.status === "active" && session.spaceKeys[space.keyVersion] ? space.keyVersion : undefined;
-    let changed = writeKeyVersion !== saved?.writeKeyVersion;
+    const binaryPhotos = this.binaryPhotos;
+    let changed = writeKeyVersion !== saved?.writeKeyVersion || binaryPhotos !== saved?.binaryPhotos;
     if (!saved && cache?.enabled) {
       try {
         const persisted = await cache.read(scope);
@@ -419,6 +549,7 @@ export class UsService {
         continue;
       }
       if (!current()) return;
+      if (rows === saved?.rows && (page.records.length > 0 || page.removed.length > 0)) rows = new Map(rows);
       for (const record of page.records) rows.set(record.id, record);
       for (const recordId of page.removed) rows.delete(recordId);
       changed ||= page.records.length > 0 || page.removed.length > 0;
@@ -426,14 +557,14 @@ export class UsService {
       if (!page.more) {
         if (cache?.enabled && (changed || Date.now() - cachedAt > 3600000)) {
           try {
-            await cache.write(scope, { records: [...rows.values()], cursor, writeKeyVersion });
+            await cache.write(scope, { records: [...rows.values()], cursor, writeKeyVersion, binaryPhotos });
             if (current()) this.syncStorageWarning = "";
           } catch {
             if (current()) this.syncStorageWarning = "无法保存回忆的浏览器密文缓存，联机同步仍可使用";
           }
           cachedAt = Date.now();
         }
-        return { scope, rows, cursor, cachedAt, writeKeyVersion };
+        return { scope, rows, cursor, cachedAt, writeKeyVersion, binaryPhotos };
       }
     }
   }
@@ -445,9 +576,11 @@ export class UsService {
     const current = () => this.secrets === session && serial === this.refreshSerial;
     if (!session || !this.space) throw new AppError("LOCKED", "请先解锁");
     try {
-      const { profiles, ...space } = await this.call<Space & { profiles?: WebProfile[] }>("getSpace");
+      const { profiles, binaryPhotos, ...space } =
+        await this.call<Space & { profiles?: WebProfile[]; binaryPhotos?: boolean }>("getSpace");
       if (this.secrets !== session || serial !== this.refreshSerial) return;
-      this.space = space;
+      this.binaryPhotos = this.transport.webDeviceChallenges === true && binaryPhotos === true;
+      if (!this.space || JSON.stringify(this.space) !== JSON.stringify(space)) this.space = space;
       await this.verifyCurrentKey();
       if (this.secrets !== session || serial !== this.refreshSerial) return;
       if (profiles && profileGeneration === this.profileGeneration) {
@@ -460,11 +593,22 @@ export class UsService {
             if (validDisplayName(name)) displayNames.set(userId, name);
           } catch { /* Skip a profile whose key is unavailable or envelope was replaced. */ }
         }
-        this.displayNames = displayNames;
+        if (this.displayNames.size !== displayNames.size || [...displayNames].some(([id, name]) => this.displayNames.get(id) !== name))
+          this.displayNames = displayNames;
       }
       const rows: CipherRecord[] = [];
       const snapshot = this.transport.webRecordSync ? await this.loadWebRows(session, space, current) : undefined;
       if (!current()) return;
+      const knownKeys = this.decodedKeys;
+      const keyVersions = Object.keys(session.spaceKeys);
+      if (snapshot && snapshot.rows === this.syncSnapshot?.rows && this.mutations.size === 0 &&
+        knownKeys?.personalKey === session.personalKey && keyVersions.length === Object.keys(knownKeys.shared).length &&
+        keyVersions.every((version) => knownKeys.shared[version] === session.spaceKeys[version])) {
+        this.syncSnapshot = snapshot;
+        this.lastSyncedAt = Date.now();
+        this.lastSyncError = "";
+        return;
+      }
       if (snapshot) {
         for (const row of snapshot.rows.values()) rows.push(row);
       } else {
@@ -483,14 +627,26 @@ export class UsService {
         }
       }
       const entries: Entry[] = [];
+      const decoded = new Map<string, { row: CipherRecord; key: string | undefined; entry?: Entry }>();
       let unreadable = 0;
+      let decrypted = 0;
       for (const r of rows) {
         if (session.sharedOnly && r.visibility === "private") continue;
-        try {
-          entries.push({ ...r, data: decryptRecord<Payload>(r, session) });
-        } catch {
-          unreadable++;
+        const key = r.visibility === "private" ? session.personalKey : session.spaceKeys[r.envelope.keyVersion];
+        let cached = snapshot ? this.decodedRecords.get(r.id) : undefined;
+        if (!cached || cached.row !== r || cached.key !== key) {
+          if (snapshot && decrypted++ % 48 === 47) {
+            await new Promise<void>((resolve) => setTimeout(resolve, 0));
+            if (!current()) return;
+          }
+          cached = { row: r, key };
+          try {
+            cached.entry = { ...r, data: decryptRecord<Payload>(r, session) };
+          } catch { /* Retry when either the ciphertext or its key changes. */ }
         }
+        if (snapshot) decoded.set(r.id, cached);
+        if (cached.entry) entries.push(cached.entry);
+        else unreadable++;
       }
       const merged = new Map(entries.map((entry) => [entry.id, entry]));
       for (const [id, mutation] of this.mutations) {
@@ -499,10 +655,14 @@ export class UsService {
           else merged.delete(id);
         } else this.mutations.delete(id);
       }
-      this.entries = [...merged.values()].sort(
+      const ordered = [...merged.values()].sort(
         (a, b) =>
           b.data.date.localeCompare(a.data.date) || b.createdAt - a.createdAt,
       );
+      if (ordered.length !== this.entries.length || ordered.some((entry, index) => entry !== this.entries[index]))
+        this.entries = ordered;
+      this.decodedRecords = decoded;
+      this.decodedKeys = snapshot ? { personalKey: session.personalKey, shared: { ...session.spaceKeys } } : undefined;
       this.unreadable = unreadable;
       this.syncSnapshot = snapshot;
       this.lastSyncedAt = Date.now();
@@ -568,7 +728,7 @@ export class UsService {
     if (status.protocol !== API_PROTOCOL)
       throw new AppError(
         "PROTOCOL_MISMATCH",
-        "云端接口版本不匹配，请更新小程序与云函数",
+        this.transport.webDeviceChallenges ? "网站接口版本不匹配，请刷新后重试" : "云端接口版本不匹配，请更新小程序与云函数",
       );
     return status;
   }
@@ -643,11 +803,11 @@ export class UsService {
     return recordOutboxScope(session);
   }
   get supportsOutbox() { return !!this.features.outbox; }
-  async prepareQueuedPhoto(bytes: string, mime: string, name: string, visibility: Visibility) {
+  async prepareQueuedPhoto(bytes: string | Uint8Array, mime: string, name: string, visibility: Visibility) {
     const session = this.secrets;
     const space = this.space;
     if (!session || !space || !this.ready) throw new AppError("LOCKED", "请先解锁");
-    const prepared = await preparePhotoWrite(bytes, mime, name, visibility, session, space.keyVersion, this.rng);
+    const prepared = await preparePhotoWrite(bytes, mime, name, visibility, session, space.keyVersion, this.rng, this.binaryPhotos);
     if (this.secrets !== session || this.space?.id !== space.id) throw new AppError("LOCKED", "请先解锁");
     return prepared;
   }
@@ -671,8 +831,32 @@ export class UsService {
       (!session.sharedOnly && record.creatorId === session.userId)).map((item) => {
       let data: Payload | undefined;
       try { data = decryptRecord<Payload>(item.record, session); } catch { /* Key may be unavailable after recovery. */ }
-      return { operationId: item.operationId, state: item.state, queuedAt: item.queuedAt, data };
+      return {
+        operationId: item.operationId, state: item.state, queuedAt: item.queuedAt, data,
+        visibility: item.record.visibility, attachments: item.attachments,
+      };
     });
+  }
+  async copyOutboxAsNew(operationId: string) {
+    const session = this.secrets;
+    const item = (await this.listOutbox()).find((candidate) => candidate.operationId === operationId);
+    if (!session || this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+    if (!item?.data || item.data.kind !== "memory")
+      throw new AppError("OUTBOX_UNAVAILABLE", "此待同步日记暂时不能复制");
+    const { data, visibility } = item;
+    const copied = [];
+    for (const photo of data.photos ?? []) {
+      const pending = item.attachments?.find(({ fileId }) => fileId === photo.fileId);
+      const bytes = pending
+        ? decryptPhotoBytes(pending.envelope, session, photo.id, visibility)
+        : await this.readPhotoBytes(photo, visibility, () => this.secrets === session);
+      if (this.secrets !== session) throw new AppError("LOCKED", "会话已改变，请重新解锁");
+      copied.push(await this.prepareQueuedPhoto(bytes, photo.mime, photo.name, visibility));
+    }
+    if (this.secrets !== session) throw new AppError("LOCKED", "会话已改变，请重新解锁");
+    const { history: _history, favoriteBy: _favorites, ...draft } = data;
+    await this.queueSave({ ...draft, photos: copied.map(({ photo }) => photo) }, visibility, undefined,
+      copied.map(({ photo, envelope }) => ({ fileId: photo.fileId, envelope })));
   }
   async discardOutbox(operationId: string) {
     const outbox = this.features.outbox;
@@ -891,7 +1075,7 @@ export class UsService {
     title: string,
     answer: string,
     kind: "question" | "quiz" = "question",
-    date = today(),
+    date = this.day,
   ) {
     dayNumber(date);
     if (!this.space || !this.secrets) throw new AppError("LOCKED", "请先解锁");
@@ -931,7 +1115,7 @@ export class UsService {
     if (!text || text.length > 180)
       throw new AppError("INVALID_QUESTION", "请写下 1～180 字的问题");
     if (!this.space || !this.secrets) throw new AppError("LOCKED", "请先解锁");
-    const date = today();
+    const date = this.day;
     const fixedId = hashText(
       this.space.id + "/question/" + date + "/" + hashText(text),
     );
@@ -956,7 +1140,7 @@ export class UsService {
     );
   }
   async openCapsule(e: Entry) {
-    if (!canOpenCapsule(e, this.space!.members))
+    if (!canOpenCapsule(e, this.space!.members, this.day))
       throw new AppError(
         "CAPSULE_LOCKED",
         "还没到开启的时候，把期待留给未来吧",
@@ -964,7 +1148,7 @@ export class UsService {
     return this.save({ ...e.data, openedAt: Date.now() }, "shared", e);
   }
   async addPhoto(
-    bytes: string,
+    bytes: string | Uint8Array,
     mime: string,
     name: string,
     visibility: Visibility,
@@ -974,7 +1158,7 @@ export class UsService {
     const space = this.space;
     if (!session || !space) throw new AppError("LOCKED", "请先解锁");
     this.requirePrivateAccess(visibility);
-    const { photo, envelope } = await preparePhotoWrite(bytes, mime, name, visibility, session, space.keyVersion, this.rng);
+    const { photo, envelope } = await preparePhotoWrite(bytes, mime, name, visibility, session, space.keyVersion, this.rng, this.binaryPhotos);
     if (this.secrets !== session || this.space?.id !== space.id) throw new AppError("LOCKED", "请先解锁");
     return { ...photo, fileId: await this.uploadPhotoEnvelope(envelope, visibility, onUploadProgress) };
   }
@@ -1044,6 +1228,9 @@ export class UsService {
   }
   async readPhoto(photo: Attachment, visibility: Visibility, active?: () => boolean): Promise<string> {
     if (photo.sample) return `/assets/${photo.sample}.svg`;
+    return b64(await this.readPhotoBytes(photo, visibility, active));
+  }
+  async readPhotoBytes(photo: Attachment, visibility: Visibility, active?: () => boolean): Promise<Uint8Array> {
     const session = this.secrets;
     const space = this.space;
     if (!session || !space) throw new AppError("LOCKED", "请先解锁");
@@ -1053,6 +1240,48 @@ export class UsService {
         throw new AppError("PHOTO_CACHE_EXPIRED", "照片缓存已过期");
     };
     const fileId = photo.fileId;
+    if (fileId && this.transport.webRecordSync) {
+      const cache = this.features.cipherCache;
+      const scope = cipherSnapshotScope(session);
+      const requestKey = JSON.stringify([fileId, photo.id, visibility]);
+      let request = this.photoRequests.get(requestKey);
+      if (!request) {
+        request = (async () => {
+          const cached = cache?.enabled ? await cache.readPhoto?.(scope, fileId).catch(() => undefined) : undefined;
+          const saved = cached ?? this.recentPhotoEnvelopes.get(fileId);
+          if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+          if (saved) {
+            const status = await this.call<{ unchanged?: boolean; envelope?: Envelope }>("fileGet", { fileId, cached: true });
+            if (status.unchanged) {
+              try {
+                if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+                const content = decryptPhotoBytes(saved, session, photo.id, visibility);
+                if (!cached && cache?.enabled) await cache.writePhoto(scope, fileId, saved).catch(() => {});
+                return content;
+              } catch { /* Replace a damaged cached envelope with the server copy. */ }
+            }
+            if (status.envelope) return decryptPhotoBytes(status.envelope, session, photo.id, visibility);
+          }
+          if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+          const { envelope } = await this.call<{ envelope: Envelope }>("fileGet", { fileId });
+          if (this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
+          const content = decryptPhotoBytes(envelope, session, photo.id, visibility);
+          this.recentPhotoEnvelopes.set(fileId, envelope);
+          if (this.recentPhotoEnvelopes.size > 4)
+            this.recentPhotoEnvelopes.delete(this.recentPhotoEnvelopes.keys().next().value!);
+          if (cache?.enabled) await cache.writePhoto(scope, fileId, envelope).catch(() => {});
+          return content;
+        })();
+        this.photoRequests.set(requestKey, request);
+        const release = () => {
+          if (this.photoRequests.get(requestKey) === request) this.photoRequests.delete(requestKey);
+        };
+        void request.then(release, release);
+      }
+      const content = await request;
+      checkSession();
+      return content;
+    }
     const segmented = active && (!photo.bytes || photo.bytes * 16 / 9 + 64 > PHOTO_DOWNLOAD_PART_SIZE);
     const { envelope } = await this.call<{
       envelope: Envelope;
@@ -1074,7 +1303,7 @@ export class UsService {
       return { envelope: { ...first.envelope, ciphertext: chunks.join("") } };
     });
     checkSession();
-    const content = decryptPhoto(envelope, session, photo.id, visibility);
+    const content = decryptPhotoBytes(envelope, session, photo.id, visibility);
     const cache = this.features.cipherCache;
     if (fileId && cache?.enabled) {
       await cache.writePhoto(cipherSnapshotScope(session), fileId, envelope).catch(() => {});
@@ -1257,6 +1486,14 @@ export class UsService {
   }
   lock() {
     this.syncSnapshot = undefined;
+    this.decodedRecords.clear();
+    this.decodedKeys = undefined;
+    this.photoRequests.clear();
+    this.recentPhotoEnvelopes.clear();
+    this.binaryPhotos = false;
+    this.activeSource = undefined;
+    this.activeEntries = [];
+    this.initialDevicePending = false;
     this.displayNames = new Map();
     this.profileGeneration++;
     ++this.lockSerial;

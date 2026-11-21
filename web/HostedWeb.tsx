@@ -3,7 +3,8 @@ import { App } from "./App";
 import { createHostedService } from "./platform";
 import { forgetUnlock } from "./rememberedUnlock";
 import { setOfflineAccount } from "./cipherCache";
-import { useWebInstall } from "./WebInstall";
+import { WebInstall } from "./WebInstall";
+import { PasswordInput } from "./PasswordInput";
 
 interface WebsiteSession {
   account: string | null;
@@ -29,7 +30,7 @@ async function sessionRequest(path: string, data?: object) {
 }
 
 export function HostedWeb() {
-  const installation = useWebInstall();
+  const [installTarget, setInstallTarget] = useState<HTMLDivElement | null>(null);
   const [session, setSession] = useState<WebsiteSession | null>(null);
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
@@ -132,13 +133,14 @@ export function HostedWeb() {
     </main>
   );
   if (account && service) return (
-    <App key={account} hosted={{
+    <><WebInstall target={installTarget} /><App key={account} hosted={{
       account,
       service,
       owner: !!session?.owner,
       signOut,
-      installation,
+      installation: <div ref={setInstallTarget} />,
     }} />
+    </>
   );
   return (
     <main className="welcome">
@@ -156,7 +158,7 @@ export function HostedWeb() {
             <input value={name} onChange={(event) => setName(event.target.value)} autoComplete="username" autoCapitalize="none" required />
           </label>
           <label className="field"><span>网站密码</span>
-            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required />
+            <PasswordInput value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required />
           </label>
           {error && <p role="alert" className="error-text">{error}</p>}
           <button className="primary full" disabled={busy}>{busy ? "正在连接…" : "登录"}</button>

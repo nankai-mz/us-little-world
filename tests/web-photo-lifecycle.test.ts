@@ -5,8 +5,53 @@ import { b64, hashText } from "../src/core/crypto";
 import { photoReceiptFor } from "../src/core/photo-write";
 import { AppError, type CipherRecord } from "../src/core/types";
 import { createApi } from "../src/server/api";
-import { PHOTO_DRAFT_TTL_MS, runMaintenance } from "../src/server/lifecycle";
+import { CLOSING_GRACE_MS, PHOTO_DRAFT_TTL_MS, RECORD_RECEIPTS, runMaintenance } from "../src/server/lifecycle";
 import { openWebRepository } from "../src/server/web-repository";
+
+it("SQLite 维护可删除旧格式的已用邀请码，并完成双人空间清理", async () => {
+  const store = openWebRepository(":memory:");
+  let time = Date.now();
+  const deps = { ...store, now: () => time, id: () => randomBytes(16).toString("hex"),
+    hash: hashText, recordReceipts: true, managedPhotos: true };
+  const api = createApi(deps);
+  function member(userId: string) {
+    const values = new Map<string, string>();
+    return new UsService({
+      async call<T>(action: string, data: Record<string, unknown> = {}) {
+        const reply = await api(userId, action, data);
+        if (!reply.success) throw new AppError(reply.error!.code, reply.error!.message);
+        return reply.data as T;
+      },
+    }, { get: (key) => values.get(key) ?? null, set: (key, value) => { values.set(key, value); },
+      remove: (key) => { values.delete(key); } }, async (size) => randomBytes(size));
+  }
+  try {
+    const a = member("fixture-a");
+    const b = member("fixture-b");
+    await a.create("synthetic first member phrase", "维护回归空间", "2026-11-01");
+    const used = await a.call<{ token: string }>("createInvitation");
+    const unused = await a.call<{ token: string }>("createInvitation");
+    await b.join("synthetic second member phrase", used.token);
+    const spaceId = a.space!.id;
+    expect(await store.repo.get("invitations", hashText(used.token))).toMatchObject({ usedBy: b.userId });
+    expect((await store.repo.list("invitations", { spaceId }, 0, 10)).map(({ id }) => id))
+      .toEqual([hashText(used.token), hashText(unused.token)].sort());
+    await store.repo.put(RECORD_RECEIPTS, "expired-receipt", { spaceId, expiresAt: time + 1 });
+    time += 3600001;
+    await runMaintenance(deps);
+    expect(await store.repo.get("invitations", hashText(used.token))).toBeNull();
+    expect(await store.repo.get(RECORD_RECEIPTS, "expired-receipt")).toBeNull();
+    await store.repo.put("invitations", "legacy-used-invitation", { spaceId, usedBy: b.userId, expiresAt: time });
+    await a.closeSpace();
+    await b.closeSpace();
+    time += CLOSING_GRACE_MS + 1;
+    expect(await runMaintenance(deps)).toMatchObject({ completedSpaces: 1 });
+    expect(await store.repo.get("spaces", spaceId)).toMatchObject({ status: "closed", members: [], purgedAt: time });
+    expect(await store.repo.list("invitations", { spaceId }, 0, 10)).toEqual([]);
+    expect(await store.repo.list("encrypted_records", { spaceId }, 0, 10)).toEqual([]);
+    expect(await runMaintenance(deps)).toMatchObject({ completedSpaces: 0 });
+  } finally { store.close(); }
+});
 
 it("Web 照片的引用、回收站、到期清理和永久删除保留事务边界", async () => {
   const store = openWebRepository(":memory:");

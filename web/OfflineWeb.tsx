@@ -1,21 +1,24 @@
 import { useEffect, useRef, useState } from "react";
-import { b64, browserRandom, decryptRecord, randomId, unlockVault } from "../src/core/crypto";
-import { today } from "../src/core/date";
+import { browserRandom, decryptRecord, randomId, unlockVault } from "../src/core/crypto";
+import { spaceDay } from "../src/core/date";
 import { prepareRecordWrite } from "../src/core/record-write";
 import { recordOutboxScope } from "../src/core/web-outbox";
-import type { Entry, Payload, Secrets, Vault, Visibility } from "../src/core/types";
+import type { Attachment, Entry, Payload, Secrets, Vault, Visibility } from "../src/core/types";
+import type { OutboxItem } from "../src/core/web-outbox";
 import { offlineAccountKey, readOfflineSnapshot } from "./cipherCache";
 import { unlockGenerationKey } from "./rememberedUnlock";
 import { webOutbox } from "./recordOutbox";
 import { OfflinePhotos } from "./OfflinePhotos";
 import { prepareBrowserPhoto } from "./photos";
 import { preparePhotoWrite } from "../src/core/photo-write";
+import { PasswordInput } from "./PasswordInput";
 
 type OfflineSession = {
   records: Entry[];
   verifiedAt: number;
   expiresAt: number;
   writeKeyVersion?: number;
+  binaryPhotos: boolean;
   canWritePrivate: boolean;
 };
 type DiaryEditor = {
@@ -24,8 +27,10 @@ type DiaryEditor = {
   date: string;
   visibility: Visibility;
   existing?: Entry;
+  existingPhotos: Attachment[];
   attachments: Awaited<ReturnType<typeof preparePhotoWrite>>[];
 };
+type PendingDiary = { id: string; data: Payload; visibility: Visibility; attachments?: OutboxItem["attachments"] };
 
 function isValidSession(session: OfflineSession) {
   const now = Date.now();
@@ -34,10 +39,10 @@ function isValidSession(session: OfflineSession) {
 
 async function readPending(secrets: Secrets) {
   const items = await webOutbox.read(recordOutboxScope(secrets));
-  return items.flatMap(({ record }) => {
+  return items.flatMap(({ record, attachments }): PendingDiary[] => {
     if (record.spaceId !== secrets.spaceId || (record.visibility === "private" &&
       (secrets.sharedOnly || record.creatorId !== secrets.userId))) return [];
-    try { return [{ id: record.id, title: decryptRecord<Payload>(record, secrets).title }]; }
+    try { return [{ id: record.id, data: decryptRecord<Payload>(record, secrets), visibility: record.visibility, attachments }]; }
     catch { return []; }
   });
 }
@@ -57,7 +62,7 @@ export function OfflineWeb() {
   const [error, setError] = useState("");
   const [opened, setOpened] = useState<OfflineSession>();
   const [editor, setEditor] = useState<DiaryEditor>();
-  const [pending, setPending] = useState<{ id: string; title: string }[]>([]);
+  const [pending, setPending] = useState<PendingDiary[]>([]);
   const [status, setStatus] = useState("");
   const [reconnected, setReconnected] = useState(false);
   const editingDirty = useRef(false);
@@ -76,9 +81,30 @@ export function OfflineWeb() {
     setBusy(false);
   }
   useEffect(() => {
-    const online = () => {
-      if (editingDirty.current || writing.current) setReconnected(true);
-      else location.reload();
+    let live = true;
+    let checking = false;
+    const online = async () => {
+      if (checking) return;
+      checking = true;
+      try {
+        // The browser can report online before the origin is reachable.
+        for (let attempt = 0; live && attempt < 3; attempt++) {
+          if (editingDirty.current || writing.current) { setReconnected(true); return; }
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 1200);
+          const response = await fetch("/healthz", { cache: "no-store", signal: controller.signal }).catch(() => null);
+          clearTimeout(timeout);
+          if (!live) return;
+          if (response?.ok) {
+            if (editingDirty.current || writing.current) setReconnected(true);
+            else location.reload();
+            return;
+          }
+          await new Promise<void>((resolve) => setTimeout(resolve, 250));
+        }
+      } finally {
+        checking = false;
+      }
     };
     const beforeUnload = (event: BeforeUnloadEvent) => {
       if (editingDirty.current || writing.current) event.preventDefault();
@@ -95,6 +121,7 @@ export function OfflineWeb() {
     window.addEventListener("pagehide", lock);
     window.addEventListener("beforeunload", beforeUnload);
     return () => {
+      live = false;
       window.removeEventListener("storage", onStorage);
       window.removeEventListener("online", online);
       window.removeEventListener("pagehide", lock);
@@ -146,7 +173,7 @@ export function OfflineWeb() {
       setPending(pending);
       setOpened({
         records, verifiedAt: saved.verifiedAt, expiresAt: saved.expiresAt,
-        writeKeyVersion: saved.writeKeyVersion, canWritePrivate: !secrets.sharedOnly,
+        writeKeyVersion: saved.writeKeyVersion, binaryPhotos: saved.binaryPhotos, canWritePrivate: !secrets.sharedOnly,
       });
     } catch (failure) {
       if (sequence === attempt.current) setError(failure instanceof Error ? failure.message : "无法读取本机缓存，请联网。");
@@ -162,9 +189,10 @@ export function OfflineWeb() {
     setEditor({
       title: existing?.data.title ?? "",
       body: existing?.data.body ?? "",
-      date: existing?.data.date ?? today(),
+      date: existing?.data.date ?? spaceDay(),
       visibility: existing?.visibility ?? "shared",
       existing,
+      existingPhotos: existing?.data.photos ?? [],
       attachments: [],
     });
   }
@@ -181,7 +209,7 @@ export function OfflineWeb() {
   async function addPhotos(files: File[]) {
     const secrets = sessionSecrets.current;
     if (!editor || !opened?.writeKeyVersion || !secrets || writing.current || !files.length) return;
-    const remaining = 6 - (editor.existing?.data.photos?.length ?? 0) - editor.attachments.length;
+    const remaining = 6 - editor.existingPhotos.length - editor.attachments.length;
     const selected = files.slice(0, remaining);
     const sequence = attempt.current;
     const current = () => sequence === attempt.current && sessionSecrets.current === secrets &&
@@ -195,8 +223,8 @@ export function OfflineWeb() {
       if (!current()) break;
       try {
         const image = await prepareBrowserPhoto(file);
-        const prepared = await preparePhotoWrite(b64(new Uint8Array(await image.arrayBuffer())),
-          image.type, file.name, editor.visibility, secrets, opened.writeKeyVersion, browserRandom);
+        const prepared = await preparePhotoWrite(new Uint8Array(await image.arrayBuffer()),
+          image.type, file.name, editor.visibility, secrets, opened.writeKeyVersion, browserRandom, opened.binaryPhotos);
         if (current()) {
           editingDirty.current = true;
           setEditor((value) => value && { ...value, attachments: [...value.attachments, prepared] });
@@ -222,20 +250,22 @@ export function OfflineWeb() {
     writing.current = true;
     setBusy(true);
     try {
-      const { existing, title, body, date, visibility, attachments } = editor;
-      const photos = [...(existing?.data.photos ?? []), ...attachments.map(({ photo }) => photo)];
-      const { record, expectedRevision, photoRefs } = await prepareRecordWrite({
+      const { existing, title, body, date, visibility, attachments, existingPhotos } = editor;
+      const photos = [...existingPhotos, ...attachments.map(({ photo }) => photo)];
+      const data: Payload = {
         ...existing?.data, kind: "memory", title: title.trim(), body, date, photos,
-      }, visibility, secrets, opened.writeKeyVersion, browserRandom, existing);
+      };
+      const { record, expectedRevision, photoRefs } = await prepareRecordWrite(data, visibility, secrets, opened.writeKeyVersion, browserRandom, existing);
       const operationId = await randomId(browserRandom);
       if (!canSave()) return;
+      const pendingAttachments = attachments.map(({ photo, envelope }) => ({ fileId: photo.fileId, envelope }));
       await webOutbox.add({
         scope: recordOutboxScope(secrets), operationId, queuedAt: Date.now(), record,
         expectedRevision, photoRefs, state: "queued",
-        attachments: attachments.map(({ photo, envelope }) => ({ fileId: photo.fileId, envelope })),
+        attachments: pendingAttachments,
       });
       if (canSave()) {
-        setPending((items) => [...items, { id: record.id, title: title.trim() }]);
+        setPending((items) => [...items, { id: record.id, data, visibility, attachments: pendingAttachments }]);
         editingDirty.current = false;
         setEditor(undefined);
         setStatus("已保存在本机。联网验证后可从待同步队列发送。");
@@ -251,14 +281,14 @@ export function OfflineWeb() {
     <main className="offline-library">
       <section className="card offline-header">
         <h1>离线日记</h1>
-        <p>联网后会重新核验账号与设备。此处可阅读最近 24 小时内保存的日记文字。</p>
+        <p>联网后会重新核验账号与设备。此处可阅读最近 24 小时内缓存的日记和照片。</p>
         <button type="button" className="secondary" onClick={() => { if (confirmLeaving()) location.reload(); }}>重新连接</button>
         {opened && <button type="button" className="text-button" onClick={() => { if (confirmLeaving()) lock(); }}>锁定离线日记</button>}
         {reconnected && <p>网络已恢复。可以先保存编辑，再选择「重新连接」。</p>}
         {!opened && account && (
           <form onSubmit={(event) => { event.preventDefault(); void unlock(); }}>
             <label className="field"><span>本机解锁口令</span>
-              <input type="password" value={password} autoComplete="current-password" required
+              <PasswordInput value={password} autoComplete="current-password" required
                 onChange={(event) => setPassword(event.target.value)} />
             </label>
             <button className="primary" disabled={busy}>解锁离线日记</button>
@@ -292,13 +322,20 @@ export function OfflineWeb() {
           </label>}
           <label className="field"><span>添加离线照片</span>
             <input type="file" multiple accept="image/jpeg,image/png,image/webp"
-              disabled={busy || (editor.existing?.data.photos?.length ?? 0) + editor.attachments.length >= 6}
+              disabled={busy || editor.existingPhotos.length + editor.attachments.length >= 6}
               onChange={(event) => {
                 const files = Array.from(event.target.files ?? []);
                 event.target.value = "";
                 void addPhotos(files);
               }} />
           </label>
+          {!!editor.existingPhotos.length && account && sessionSecrets.current && <>
+            <OfflinePhotos photos={editor.existingPhotos} account={account} secrets={sessionSecrets.current} visibility={editor.visibility} />
+            <ul>{editor.existingPhotos.map((photo) => <li key={photo.id}>{photo.name}
+              <button type="button" className="text-button" disabled={busy} onClick={() =>
+                changeEditor({ existingPhotos: editor.existingPhotos.filter(({ id }) => id !== photo.id) })}>移除已有照片</button>
+            </li>)}</ul>
+          </>}
           {editor.attachments.length > 0 && <ul>
             {editor.attachments.map(({ photo }) => <li key={photo.id}>{photo.name}
               <button type="button" className="text-button" disabled={busy} onClick={() =>
@@ -315,7 +352,13 @@ export function OfflineWeb() {
       )}
       {!!pending.length && <section className="card offline-entry" aria-label="本机待同步日记">
         <h2>待同步日记（{pending.length}）</h2>
-        <ul>{pending.map(({ id, title }) => <li key={id}>{title}</li>)}</ul>
+        {pending.map(({ id, data, visibility, attachments }) => <details key={id}>
+          <summary>{data.title}</summary>
+          <p>{data.date} · {visibility === "private" ? "私人" : "共同"}</p>
+          {data.body && <p className="detail-body">{data.body}</p>}
+          {!!data.photos?.length && sessionSecrets.current && <OfflinePhotos photos={data.photos}
+            account={account ?? undefined} visibility={visibility} secrets={sessionSecrets.current} attachments={attachments} />}
+        </details>)}
       </section>}
       {opened && (
         <section aria-label="本机缓存日记">

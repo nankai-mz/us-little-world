@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 type InstallPrompt = Event & { prompt(): Promise<{ outcome: "accepted" | "dismissed" }> };
 
-export function useWebInstall() {
+export function WebInstall({ target }: { target: HTMLElement | null }) {
   const [install, setInstall] = useState<InstallPrompt>();
   const [update, setUpdate] = useState<ServiceWorker>();
   const [installed, setInstalled] = useState(() => window.matchMedia("(display-mode: standalone)").matches);
@@ -49,7 +50,7 @@ export function useWebInstall() {
       navigator.serviceWorker.removeEventListener("controllerchange", controllerChanged);
     };
   }, []);
-  return (
+  return target ? createPortal(
     <section aria-label="安装与更新" className="pwa-controls">
       {update && <button type="button" className="secondary" onClick={() => {
         applying.current = true;
@@ -65,6 +66,6 @@ export function useWebInstall() {
         <p>如果浏览器菜单有「安装」或「添加到主屏幕」，可从那里添加。在 iPhone 的 Safari 可从分享菜单添加。</p>
       </details>}
       {!supported && <p>当前浏览器不能启用安装或离线启动，可继续使用网页。</p>}
-    </section>
-  );
+    </section>, target,
+  ) : null;
 }

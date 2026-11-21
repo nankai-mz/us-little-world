@@ -13,10 +13,11 @@ import { webOutbox } from "./recordOutbox";
 
 export function createHostedService(account: string, sessionEnded: () => void) {
   const prefix = `us.web.${account}.`;
-  const transport = createTransport(async (action, data) => {
+  const transport = createTransport(async (action, data, signal) => {
     const unlocked = service.secrets;
     const response = await fetch("/api/space", {
       method: "POST",
+      signal,
       headers: { "Content-Type": "application/json", "X-Us-Account": account },
       body: JSON.stringify({ action, data }),
     });
@@ -32,7 +33,7 @@ export function createHostedService(account: string, sessionEnded: () => void) {
     if (action === "getSpace" && result.success && unlocked && unlocked === service.secrets)
       setOfflineAccount(result.data?.status === "active" ? account : null);
     return result;
-  });
+  }, { hosted: true });
   transport.webDeviceChallenges = true;
   transport.webRecordSync = true;
   const accessStorage = <T>(operation: () => T): T => {
@@ -49,7 +50,13 @@ export function createHostedService(account: string, sessionEnded: () => void) {
     get: (key) => accessStorage(() => localStorage.getItem(prefix + key)),
     set: (key, value) => accessStorage(() => localStorage.setItem(prefix + key, value)),
     remove: (key) => accessStorage(() => localStorage.removeItem(prefix + key)),
-  }, browserRandom, { recordReceipts: true, managedPhotos: true, cipherCache, outbox: webOutbox });
+  }, browserRandom, {
+    recordReceipts: true, managedPhotos: true, cipherCache, outbox: webOutbox,
+    enrollmentLock: async (work) => {
+      if (!navigator.locks) throw new AppError("LOCKS_UNAVAILABLE", "当前浏览器无法安全完成首次登记，请更新浏览器后重试");
+      return await navigator.locks.request(`us-web-enrollment:${account}`, { ifAvailable: true }, async (lock) => lock ? work() : undefined);
+    },
+  });
   return service;
 }
 export function createBrowserService(mode: "demo" | "personal") {

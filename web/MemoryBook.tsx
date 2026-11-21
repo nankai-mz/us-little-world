@@ -2,23 +2,8 @@ import { useCallback, useState } from "react";
 import type { UsService } from "../src/core/service";
 import type { Entry } from "../src/core/types";
 import { SharedMemoryPhoto } from "./SharedMemoryPhoto";
-
-type Period = "month" | "year" | "custom";
-export type BookDraft = {
-  period: Period;
-  month: string;
-  year: string;
-  from: string;
-  to: string;
-  title: string;
-  note: string;
-  selected: string[];
-};
-
-export function newBookDraft(day: string): BookDraft {
-  return { period: "month", month: day.slice(0, 7), year: day.slice(0, 4), from: `${day.slice(0, 7)}-01`, to: day,
-    title: "我们的回忆纪念册", note: "", selected: [] };
-}
+import type { BookDraft } from "./bookDraft";
+type Period = BookDraft["period"];
 
 function BookPreview({ entries, draft, service, close }: {
   entries: Entry[];

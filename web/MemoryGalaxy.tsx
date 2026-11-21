@@ -86,6 +86,9 @@ export function MemoryGalaxy({ entries, allEntries, service, state, setState, sc
             <button type="button" className="secondary" disabled={state.zoom <= 1} onClick={() => change({ zoom: state.zoom - 0.25 })}>缩小</button>
             <button type="button" className="secondary" disabled={state.zoom >= 2} onClick={() => change({ zoom: state.zoom + 0.25 })}>放大</button>
           </div>
+          <div className="galaxy-months" aria-label="星点按月份从左至右分布">
+            <span>1–3 月</span><span>4–6 月</span><span>7–9 月</span><span>10–12 月</span>
+          </div>
           <div className={`galaxy-viewport${state.zoom > 1 ? " galaxy-pannable" : ""}`} ref={map}
             onScroll={(event) => {
               scrollPosition.left = event.currentTarget.scrollLeft;
@@ -107,6 +110,12 @@ export function MemoryGalaxy({ entries, allEntries, service, state, setState, sc
               pan.moved = true;
               event.currentTarget.scrollTo(pan.scrollX - x, pan.scrollY - y);
             }}
+            onPointerUp={() => {
+              if (drag.current?.moved) {
+                // The synthesized click follows pointerup. Suppress it before resetting the drag.
+                setTimeout(() => { drag.current = null; }, 0);
+              } else drag.current = null;
+            }}
             onPointerCancel={() => { drag.current = null; }}
             onClickCapture={(event) => {
               if (event.detail > 0 && drag.current?.moved) {
@@ -119,6 +128,7 @@ export function MemoryGalaxy({ entries, allEntries, service, state, setState, sc
               {visible.map((star) => (
                 <button key={star.id} type="button" className={`galaxy-star galaxy-color-${star.color}`}
                   style={{ left: `${star.x}%`, top: `${star.y}%` }} aria-label={`打开 ${star.photo.name || star.memory.data.title}`}
+                  title={`${star.memory.data.date} · ${star.memory.data.title}`}
                   aria-pressed={selected?.id === star.id} onClick={(event) => select(star, event.currentTarget)} />
               ))}
             </div>

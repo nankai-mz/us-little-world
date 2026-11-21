@@ -19,8 +19,8 @@ const ACTION_TIMEOUT_MS = new Map([
   ["fileUploadStatus", 5000],
 ]);
 export function createTransport(
-  invoke: (action: string, data: Record<string, unknown>) => Promise<unknown>,
-  options: { timeoutMs?: number; retries?: number } = {},
+  invoke: (action: string, data: Record<string, unknown>, signal?: AbortSignal) => Promise<unknown>,
+  options: { timeoutMs?: number; retries?: number; hosted?: boolean } = {},
 ): Transport {
   return {
     async call<T>(action: string, data = {}): Promise<T> {
@@ -29,14 +29,15 @@ export function createTransport(
         : 1;
       const timeoutMs = options.timeoutMs ?? ACTION_TIMEOUT_MS.get(action) ?? 15000;
       for (let attempt = 0; attempt < attempts; attempt++) {
+        const controller = options.hosted && typeof AbortController !== "undefined" ? new AbortController() : undefined;
         let timer: ReturnType<typeof setTimeout> | undefined;
         let raw: unknown;
         try {
           raw = await Promise.race([
-            invoke(action, data),
+            invoke(action, data, controller?.signal),
             new Promise((_, reject) => {
               timer = setTimeout(
-                () =>
+                () => {
                   reject(
                     new AppError(
                       "TIMEOUT",
@@ -46,7 +47,9 @@ export function createTransport(
                           ? "照片上传未收到确认，当前未加入日记。请在网络稳定后重试"
                           : "操作结果尚未确认，请联网刷新后查看，避免重复提交",
                     ),
-                  ),
+                  );
+                  controller?.abort();
+                },
                 timeoutMs,
               );
             }),
@@ -72,7 +75,7 @@ export function createTransport(
         if (!reply || typeof reply.success !== "boolean")
           throw new AppError(
             "INVALID_RESPONSE",
-            "云端返回格式不正确，请检查云函数版本",
+            options.hosted ? "网站返回格式不正确，请刷新后重试" : "云端返回格式不正确，请检查云函数版本",
           );
         if (!reply.success)
           throw new AppError(

@@ -68,8 +68,10 @@ async function checkDiary(page: Page, title: string, filename: string, height: n
   await expect.poll(() => photo.evaluate((image: HTMLImageElement) => [image.naturalWidth, image.naturalHeight])).toEqual([96, height]);
   if (filename.endsWith(".jpg")) {
     const source = await photo.getAttribute("src");
-    expect(source).toMatch(/^data:image\/jpeg;base64,/);
-    expect(Buffer.from(source!.split(",")[1], "base64").includes(Buffer.from("Exif\0\0"))).toBe(false);
+    expect(source).toMatch(/^blob:/);
+    const bytes = await photo.evaluate(async (image: HTMLImageElement) =>
+      Array.from(new Uint8Array(await (await fetch(image.src)).arrayBuffer())));
+    expect(Buffer.from(bytes).includes(Buffer.from("Exif\0\0"))).toBe(false);
   } else {
     expect(await photo.evaluate((image: HTMLImageElement) => {
       const canvas = document.createElement("canvas");
@@ -99,6 +101,7 @@ async function downloadVault(page: Page, origin: string, phrase: string): Promis
   expect(backup).toMatchObject({ format: "UsBackup", version: 2 });
   expect(Object.keys(backup.vault).sort()).toEqual(["recoveryEnvelope", "version"]);
   await closeModal(page);
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   return { key, file };
 }
 
@@ -108,19 +111,35 @@ test("Firefox 与 WebKit 双人图文、冷启动离线与互换浏览器恢复"
   const { accounts, origin } = fixture;
   const browsers: Browser[] = [];
   const errors: string[] = [];
-  // WebKit reports fetches that are cancelled by a page navigation as page errors
-  // ("Fetch API cannot load ... due to access control checks."). The app rejects and
-  // handles those promises, so they are recorded as engine noise instead of failures.
-  const engineNetworkNoise: string[] = [];
+  const engineNetworkNoise: { engine: string; phase: string; path: string; message: string }[] = [];
+  const endpoint = "/api/space";
+  const host = new URL(origin).host;
+  const cancellationMessages = new Set([
+    `Fetch API cannot load ${origin}${endpoint} due to access control checks.`,
+    `/${host}${endpoint} due to access control checks.`,
+  ]);
+  let networkAvailable = true;
+  const setNetworkAvailable = (available: boolean) => {
+    networkAvailable = available;
+    fixture.setNetworkAvailable(available);
+  };
   const firstPhrase = "first compatibility unlock phrase";
   const secondPhrase = "second compatibility unlock phrase";
   const newPage = async (browser: Browser, width: number) => {
     const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width, height: 820 } });
     const page = await context.newPage();
+    const engine = browser.browserType().name();
+    let navigatingAt = -Infinity;
+    page.on("request", (request) => {
+      if (request.isNavigationRequest()) navigatingAt = Date.now();
+    });
     page.on("pageerror", (error) => {
-      if (/due to access control checks|Load failed|Network request failed/.test(error.message))
-        engineNetworkNoise.push(error.message);
-      else errors.push(error.message);
+      const offline = !networkAvailable;
+      const navigating = Date.now() - navigatingAt < 1500;
+      const message = error.message.replace(origin, "").replace(host, "测试源");
+      if (engine === "webkit" && (offline || navigating) && cancellationMessages.has(error.message))
+        engineNetworkNoise.push({ engine, phase: offline ? "断网" : "导航", path: endpoint, message });
+      else errors.push(`${engine}（${offline ? "断网" : navigating ? "导航" : "普通交互"}）：${message}`);
     });
     return page;
   };
@@ -214,7 +233,7 @@ test("Firefox 与 WebKit 双人图文、冷启动离线与互换浏览器恢复"
     // sessions, so the fixture stops forwarding as well. WebKit reports an internal
     // navigation error when its network emulation is combined with a worker-cached page,
     // so the WebKit profile only loses the real upstream connection.
-    fixture.setNetworkAvailable(false);
+    setNetworkAvailable(false);
     if (!bIsWebKit) await b.context().setOffline(true);
     try {
       await b.reload({ waitUntil: "domcontentloaded" });
@@ -227,7 +246,7 @@ test("Firefox 与 WebKit 双人图文、冷启动离线与互换浏览器恢复"
         .evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(96);
       await expect(b.getByText("Firefox 私人日记", { exact: true })).toHaveCount(0);
     } finally {
-      fixture.setNetworkAvailable(true);
+      setNetworkAvailable(true);
       if (!bIsWebKit) await b.context().setOffline(false);
     }
 
@@ -390,7 +409,7 @@ test("Firefox 与 WebKit 双人图文、冷启动离线与互换浏览器恢复"
       foreignBackupRejected: true, revokedDeviceLocked: true, revokedDeviceReRegistered: true,
       restoredDeviceWriteBack: true, sharedOnlyDevice: true, rememberedUnlockReload: true,
       rememberedUnlockCancelled: true, cachePayloadText: true,
-      engineNetworkNoise: engineNetworkNoise.length }, null, 2));
+      engineNetworkNoise }, null, 2));
     await info.attach("browser-compat", { path: report, contentType: "application/json" });
   } finally {
     try { await Promise.all(browsers.map((browser) => browser.close())); }

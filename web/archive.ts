@@ -1,5 +1,4 @@
 import { strToU8, Zip, ZipPassThrough } from "fflate";
-import { unb64 } from "../src/core/crypto";
 import type { UsService } from "../src/core/service";
 import { AppError, type Entry, type Visibility } from "../src/core/types";
 
@@ -73,14 +72,14 @@ export async function createArchive(
       try {
         const extension = photo.sample ? "svg" : extensions.get(photo.mime);
         if (!extension) throw new AppError("UNSUPPORTED_PHOTO", "无法识别照片格式");
-        const raw = await service.readPhoto(photo, entry.visibility, active);
         let bytes: Uint8Array;
         if (photo.sample) {
+          const raw = await service.readPhoto(photo, entry.visibility, active);
           if (!/^\/assets\/[a-z0-9-]+\.svg$/.test(raw)) throw new AppError("INVALID_PHOTO", "无效示例照片");
           const response = await fetch(raw, { signal });
           if (!response.ok) throw new AppError("PHOTO_MISSING", "示例图片暂不可用");
           bytes = new Uint8Array(await response.arrayBuffer());
-        } else bytes = unb64(raw);
+        } else bytes = await service.readPhotoBytes(photo, entry.visibility, active);
         checkActive();
         const path = `photos/${index + 1}-${offset + 1}.${extension}`;
         add(path, bytes);

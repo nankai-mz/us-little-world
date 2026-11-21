@@ -52,6 +52,11 @@ export async function seal(
   rng: RandomSource,
   keyVersion = 1,
 ): Promise<Envelope> {
+  return sealBytes(utf8(JSON.stringify(value)), master, aad, rng, keyVersion);
+}
+export async function sealBytes(
+  bytes: Uint8Array, master: Uint8Array, aad: string, rng: RandomSource, keyVersion = 1,
+): Promise<Envelope> {
   const nonce = await rng(24);
   const key = keyFor(master, aad);
   try {
@@ -60,11 +65,7 @@ export async function seal(
       algorithm: "XCHACHA20-POLY1305",
       keyVersion,
       nonce: b64(nonce),
-      ciphertext: b64(
-        xchacha20poly1305(key, nonce, utf8(aad)).encrypt(
-          utf8(JSON.stringify(value)),
-        ),
-      ),
+      ciphertext: b64(xchacha20poly1305(key, nonce, utf8(aad)).encrypt(bytes)),
     };
   } finally {
     key.fill(0);
@@ -75,17 +76,20 @@ export function open<T>(
   master: Uint8Array,
   aad: string,
 ): T {
+  if (envelope.encoding) throw new AppError("DECRYPT_FAILED", "不支持的密文编码");
+  const bytes = openBytes(envelope, master, aad);
+  try {
+    return JSON.parse(new TextDecoder().decode(bytes)) as T;
+  } catch {
+    throw new AppError("DECRYPT_FAILED", "密文内容格式不正确");
+  }
+}
+function openBytes(envelope: Envelope, master: Uint8Array, aad: string) {
   if (envelope.version !== 1 || envelope.algorithm !== "XCHACHA20-POLY1305")
     throw new AppError("DECRYPT_FAILED", "不支持的密文版本");
   const key = keyFor(master, aad);
   try {
-    return JSON.parse(
-      new TextDecoder().decode(
-        xchacha20poly1305(key, unb64(envelope.nonce), utf8(aad)).decrypt(
-          unb64(envelope.ciphertext),
-        ),
-      ),
-    ) as T;
+    return xchacha20poly1305(key, unb64(envelope.nonce), utf8(aad)).decrypt(unb64(envelope.ciphertext));
   } catch {
     throw new AppError(
       "DECRYPT_FAILED",
@@ -125,10 +129,15 @@ export function decryptRecord<T>(record: CipherRecord, secrets: Secrets): T {
   );
 }
 export function decryptPhoto(envelope: Envelope, secrets: Secrets, photoId: string, visibility: RecordMeta["visibility"]) {
+  return b64(decryptPhotoBytes(envelope, secrets, photoId, visibility));
+}
+export function decryptPhotoBytes(envelope: Envelope, secrets: Secrets, photoId: string, visibility: RecordMeta["visibility"]) {
   const key = visibility === "private" ? secrets.personalKey : secrets.spaceKeys[envelope.keyVersion];
   if (!key || (visibility === "private" && secrets.sharedOnly))
     throw new AppError("KEY_NOT_FOUND", "缺少此版本的照片密钥");
-  return open<{ base64: string }>(envelope, unb64(key), `Us/file/1/${secrets.spaceId}/${photoId}/${visibility}`).base64;
+  const suffix = `${secrets.spaceId}/${photoId}/${visibility}`;
+  return envelope.encoding === "bytes" ? openBytes(envelope, unb64(key), `Us/file/2/${suffix}`)
+    : unb64(open<{ base64: string }>(envelope, unb64(key), `Us/file/1/${suffix}`).base64);
 }
 export async function newSecrets(
   rng: RandomSource,

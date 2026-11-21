@@ -3,6 +3,7 @@ const { cacheName, assets } = self.US_PUBLIC_BUILD;
 const shell = "/offline-shell.html";
 const allowed = new Set(assets);
 const prefix = "us-public-shell-";
+const installed = "/__us-shell-installed";
 
 self.addEventListener("install", (event) => {
   event.waitUntil((async () => {
@@ -11,6 +12,7 @@ self.addEventListener("install", (event) => {
       await cache.addAll([shell, ...assets].map((path) =>
         new Request(path, { cache: "reload", credentials: "omit" }),
       ));
+      await cache.put(installed, new Response(String(Date.now())));
     } catch (error) {
       await caches.delete(cacheName);
       throw error;
@@ -21,7 +23,12 @@ self.addEventListener("install", (event) => {
 self.addEventListener("activate", (event) => {
   event.waitUntil((async () => {
     const obsolete = (await caches.keys()).filter((key) => key.startsWith(prefix) && key !== cacheName);
-    await Promise.all(obsolete.slice(0, -1).map((key) => caches.delete(key)));
+    const versions = await Promise.all(obsolete.map(async (key) => {
+      const response = await (await caches.open(key)).match(installed);
+      return { key, time: response ? Number(await response.text()) || 0 : 0 };
+    }));
+    const newest = versions.reduce((latest, entry) => !latest || entry.time >= latest.time ? entry : latest, undefined);
+    await Promise.all(obsolete.filter((key) => key !== newest?.key).map((key) => caches.delete(key)));
     await self.clients.claim();
   })());
 });
@@ -35,10 +42,12 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (request.method !== "GET" || url.origin !== self.location.origin) return;
   if (request.mode === "navigate" && (url.pathname === "/" || /^\/app(?:\/|$)/.test(url.pathname))) {
-    event.respondWith(fetch(request).catch(async () => {
+    event.respondWith((async () => {
+      const response = await fetch(request).catch(() => undefined);
+      if (response && ![502, 503, 504].includes(response.status)) return response;
       const cache = await caches.open(cacheName);
-      return await cache.match(shell) ?? Response.error();
-    }));
+      return await cache.match(shell) ?? response ?? Response.error();
+    })());
   } else if (allowed.has(url.pathname) && !url.search) {
     event.respondWith((async () => {
       const cache = await caches.open(cacheName);

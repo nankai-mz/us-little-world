@@ -20,4 +20,5 @@ project.private.config.json
 *.log
 coverage/
 artifacts/
+.codex-remote-attachments/
 release/

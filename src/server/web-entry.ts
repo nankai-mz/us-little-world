@@ -1,6 +1,7 @@
 import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from "node:crypto";
-import { readFile, mkdir, readdir, statfs } from "node:fs/promises";
+import { readFile, mkdir, statfs } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { isIP } from "node:net";
 import { dirname, extname, resolve } from "node:path";
 import { promisify } from "node:util";
 import { createApi } from "./api";
@@ -42,17 +43,37 @@ const dataDirectory = dirname(database);
 await mkdir(dataDirectory, { recursive: true, mode: 0o700 });
 const files = openWebRepository(database);
 async function checkPhotoCapacity() {
-  const { bavail, blocks } = await statfs(dataDirectory, { bigint: true }).catch(() => {
+  const { bavail, blocks, bsize } = await statfs(dataDirectory, { bigint: true }).catch(() => {
     throw new AppError("PHOTO_STORAGE_LOW", "暂时无法核对服务器存储空间，请稍后重试上传照片");
   });
-  if (blocks <= 0n || bavail * 10n < blocks)
+  const reserveCap = 1024n ** 3n;
+  if (blocks <= 0n || bsize <= 0n || (bavail * 10n < blocks && bavail * bsize < reserveCap))
     throw new AppError("PHOTO_STORAGE_LOW", "服务器剩余存储空间不足。可以先保存文字，空间恢复后再添加照片");
 }
+function logFailure(operation: string, error: unknown, requestId?: string) {
+  const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+  const location = error instanceof Error && error.stack?.split("\n").slice(1)
+    .map((frame) => /^\s*at (?:async )?([A-Za-z][A-Za-z0-9_.]{1,60})\s+\(/.exec(frame)?.[1])
+    .find((name) => name);
+  console.error(JSON.stringify({
+    operation, requestId, location: location || undefined,
+    error: error instanceof TypeError ? "TypeError" : error instanceof RangeError ? "RangeError" : "Error",
+    code: typeof code === "string" && /^[A-Z][A-Z0-9_]{1,50}$/.test(code) ? code : undefined,
+  }));
+}
 const deps = { ...files, runtime: { mode: "cloud" } as const, recordReceipts: true, managedPhotos: true, webDeviceChallenges: true,
-  now: Date.now, hash, id: () => randomBytes(16).toString("hex"), checkPhotoCapacity };
+  now: Date.now, hash, id: () => randomBytes(16).toString("hex"), checkPhotoCapacity,
+  onInternalError: (error: unknown) => logFailure("space-api", error) };
 const api = createApi(deps);
+let maintenanceRun: Promise<unknown> | undefined;
+function maintain() {
+  if (maintenanceRun) return;
+  maintenanceRun = runMaintenance(deps).catch((error) => logFailure("maintenance", error)).finally(() => {
+    maintenanceRun = undefined;
+  });
+}
 const maintenance = setInterval(() => {
-  void runMaintenance(deps).catch(() => console.error("Web space maintenance failed."));
+  maintain();
 }, 3600000);
 maintenance.unref();
 const html = (await readFile("dist/index.html", "utf8")).replace("<head>",
@@ -66,16 +87,33 @@ type WebSession = {
   authorization?: DeviceBinding & { action: string; expiresAt: number };
 };
 const sessions = new Map<string, WebSession>();
-const unboundActions = new Set(["health", "bootstrap", "createSpace", "joinSpace"]);
+const unboundActions = new Set(["health", "bootstrap", "createSpace", "joinSpace", "inspectInvitation"]);
 const sensitiveActions = new Set(["putTransfer", "revokeDevice", "rotateSpaceKey", "closeSpace", "cancelClose"]);
 const deviceIdentifier = /^[a-zA-Z0-9_-]{1,80}$/;
 const cookieName = origin.protocol === "https:" ? "__Host-us_session" : "us_session";
 const cookieAttributes = `Path=/; HttpOnly; SameSite=Strict${origin.protocol === "https:" ? "; Secure" : ""}`;
 const attemptWindow = 60000;
-let attempts = 0;
-let windowEnds = Date.now() + attemptWindow;
 let passwordChecks = 0;
+let loginAttempts = new Map<string, number>();
+let windowEnds = Date.now() + attemptWindow;
+const trustProxy = process.env.US_WEB_TRUST_LOOPBACK_PROXY === "1";
 const reauthAttempts = new Map<string, { count: number; expiresAt: number }>();
+function loginLimit(request: IncomingMessage, account?: string) {
+  const now = Date.now();
+  if (now >= windowEnds) {
+    loginAttempts = new Map();
+    windowEnds = now + attemptWindow;
+  }
+  const peer = request.socket.remoteAddress || "unknown";
+  const forwarded = request.headers["x-us-client-ip"];
+  const ip = trustProxy && ["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(peer) &&
+    typeof forwarded === "string" && isIP(forwarded) ? forwarded : peer;
+  const key = account ? `${ip}/${credentials.has(account) ? account : "?"}` : ip;
+  const count = loginAttempts.get(key) ?? 0;
+  if (count >= (account ? 10 : 40) || (!count && loginAttempts.size >= 4096))
+    return Math.max(1, Math.ceil((windowEnds - now) / 1000));
+  loginAttempts.set(key, count + 1);
+}
 const mime: Record<string, string> = {
   ".css": "text/css", ".js": "text/javascript", ".svg": "image/svg+xml",
   ".png": "image/png", ".jpg": "image/jpeg", ".webp": "image/webp",
@@ -85,10 +123,20 @@ const offlineShell = html.replace("<head>", '<head><meta name="us-web-offline" c
 const workerSource = await readFile("dist/sw.js", "utf8").catch(() => null);
 const manifest = await readFile("dist/manifest.webmanifest").catch(() => null);
 let serviceWorker: string | null = null;
+const publicAssets = new Set<string>();
+const immutableAssets = new Set<string>();
 if (workerSource && manifest) {
-  const entries = await readdir("dist/assets", { withFileTypes: true });
-  const assets = entries.filter((entry) => entry.isFile() && /^[a-zA-Z0-9._-]+$/.test(entry.name) && mime[extname(entry.name)])
-    .map(({ name }) => `/assets/${name}`).sort();
+  const build = JSON.parse(await readFile("dist/.vite/manifest.json", "utf8")) as
+    Record<string, { file: string; css?: string[]; assets?: string[] }>;
+  for (const chunk of Object.values(build)) {
+    for (const path of [chunk.file, ...(chunk.css ?? []), ...(chunk.assets ?? [])]) {
+      if (!/^assets\/[a-zA-Z0-9._-]+$/.test(path) || !mime[extname(path)]) continue;
+      immutableAssets.add("/" + path);
+    }
+  }
+  const illustrations = ["coffee", "favicon", "flower", "pet-room", "sea", "sunset"].map((name) => `/assets/${name}.svg`);
+  for (const path of [...illustrations, "/assets/icon-192.png", "/assets/icon-512.png", ...immutableAssets]) publicAssets.add(path);
+  const assets = [...publicAssets].sort();
   const digest = createHash("sha256").update(offlineShell).update(workerSource).update(manifest);
   for (const file of assets) digest.update(file).update(await readFile(resolve("dist", "." + file)));
   serviceWorker = `self.US_PUBLIC_BUILD = ${JSON.stringify({
@@ -135,7 +183,7 @@ const server = createServer({ requestTimeout: 30000, headersTimeout: 10000 }, as
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader("Referrer-Policy", "no-referrer");
-  response.setHeader("Content-Security-Policy", "default-src 'self'; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  response.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' blob:; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
   if (origin.protocol === "https:") response.setHeader("Strict-Transport-Security", "max-age=15552000");
   const path = (request.url || "").split("?")[0];
   try {
@@ -164,11 +212,12 @@ const server = createServer({ requestTimeout: 30000, headersTimeout: 10000 }, as
       response.end(request.method === "HEAD" ? undefined : html);
       return;
     }
-    if (request.method === "GET" && /^\/assets\/[a-zA-Z0-9._-]+$/.test(path) && mime[extname(path)]) {
+    if ((request.method === "GET" || request.method === "HEAD") && publicAssets.has(path)) {
       const asset = await readFile(resolve("dist", "." + path)).catch(() => null);
       if (asset) {
+        response.setHeader("Cache-Control", immutableAssets.has(path) ? "public, max-age=31536000, immutable" : "public, max-age=3600");
         response.writeHead(200, { "Content-Type": mime[extname(path)] });
-        response.end(asset);
+        response.end(request.method === "HEAD" ? undefined : asset);
         return;
       }
     }
@@ -189,15 +238,21 @@ const server = createServer({ requestTimeout: 30000, headersTimeout: 10000 }, as
     }
     if (path === "/api/login") {
       const now = Date.now();
-      if (now >= windowEnds) { attempts = 0; windowEnds = now + attemptWindow; }
-      if (++attempts > 10) {
-        response.setHeader("Retry-After", String(Math.ceil((windowEnds - now) / 1000)));
+      const ipLimit = loginLimit(request);
+      if (ipLimit) {
+        response.setHeader("Retry-After", String(ipLimit));
         fail(response, 429, "RATE_LIMITED", "登录尝试过多，请稍后再试");
         return;
       }
       const { name, password } = await readJson(request, 1024);
       if (typeof name !== "string" || !accountName.test(name) || typeof password !== "string" || Buffer.byteLength(password) > 256) {
         fail(response, 401, "INVALID_LOGIN", "账号或网站密码不正确");
+        return;
+      }
+      const accountLimit = loginLimit(request, name);
+      if (accountLimit) {
+        response.setHeader("Retry-After", String(accountLimit));
+        fail(response, 429, "RATE_LIMITED", "登录尝试过多，请稍后再试");
         return;
       }
       if (passwordChecks >= 2) {
@@ -237,7 +292,8 @@ const server = createServer({ requestTimeout: 30000, headersTimeout: 10000 }, as
       return;
     }
     const input = data as Record<string, unknown>;
-    if ((action === "createSpace" && account !== owner) || (action === "joinSpace" && account === owner)) {
+    if ((action === "createSpace" && account !== owner) ||
+      (["joinSpace", "inspectInvitation"].includes(action) && account === owner)) {
       fail(response, 403, "FORBIDDEN", "请由第一个账号创建空间，另一个账号凭邀请码加入");
       return;
     }
@@ -258,7 +314,7 @@ const server = createServer({ requestTimeout: 30000, headersTimeout: 10000 }, as
       return;
     }
     const userId = hash(`Us/web/account/${account}`);
-    if (action === "registerDevice") {
+    if (action === "registerDevice" || (["createSpace", "joinSpace"].includes(action) && input.initialDevice === true)) {
       const nonce = (input.proof as { nonce?: unknown } | undefined)?.nonce;
       const challenge = typeof nonce === "string" ? session.challenges.get(nonce) : undefined;
       if (challenge) session.challenges.delete(nonce as string);
@@ -334,12 +390,23 @@ const server = createServer({ requestTimeout: 30000, headersTimeout: 10000 }, as
       if (!response.destroyed) fail(response, 400, "INVALID_REQUEST", "请求格式或大小不正确");
       return;
     }
-    console.error("Website request failed.");
-    if (!response.headersSent) fail(response, 500, "INTERNAL_ERROR", "服务暂时不可用");
+    const requestId = randomBytes(8).toString("hex");
+    logFailure("website-request", error, requestId);
+    if (!response.headersSent) {
+      response.setHeader("X-Request-ID", requestId);
+      fail(response, 500, "INTERNAL_ERROR", "服务暂时不可用");
+    }
     else response.end();
   }
 });
-server.listen(port, "127.0.0.1", () => console.log(`网站已启动 http://127.0.0.1:${port}/`));
+server.listen(port, "127.0.0.1", () => {
+  console.log(`网站已启动 http://127.0.0.1:${port}/`);
+  maintain();
+});
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
-  process.once(signal, () => server.close(() => { clearInterval(maintenance); files.close(); }));
+  process.once(signal, () => {
+    clearInterval(maintenance);
+    server.close(() => void Promise.resolve(maintenanceRun).finally(files.close));
+    server.closeIdleConnections();
+  });
 }

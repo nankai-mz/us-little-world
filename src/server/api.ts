@@ -8,7 +8,7 @@ import {
   type ApiReply,
 } from "../core/types";
 import { API_PROTOCOL, APP_VERSION, RECORD_RECEIPT_TTL_MS } from "../core/protocol";
-import { MAX_PHOTO_CIPHERTEXT, PHOTO_DOWNLOAD_PART_SIZE, PHOTO_UPLOAD_PART_SIZE } from "../core/photos";
+import { base64ByteLength, MAX_PHOTO_BYTES, MAX_PHOTO_CIPHERTEXT, PHOTO_DOWNLOAD_PART_SIZE, PHOTO_UPLOAD_PART_SIZE } from "../core/photos";
 import { verifyWebDeviceSignature, webRecoveryKeys, type WebDevice, type WebDeviceProof } from "../core/web-device";
 import { webProfiles, type WebProfile } from "../core/web-profile";
 import { markRecordChange, syncRecords, type WebSync } from "./web-sync";
@@ -45,6 +45,7 @@ export interface Repository extends Tx {
   ): Promise<any[]>;
 }
 export interface ServerDeps {
+  onInternalError?: (error: unknown) => void;
   repo: Repository;
   now: () => number;
   id: () => string;
@@ -52,6 +53,7 @@ export interface ServerDeps {
   ai?: (text: string, task: string) => Promise<string>;
   filePut?: (path: string, bytes: string) => Promise<string>;
   fileGet?: (fileId: string) => Promise<string>;
+  fileGetPart?: (fileId: string, part: number) => Promise<{ envelope: Envelope; parts: number } | undefined>;
   fileDelete?: (fileId: string) => Promise<void>;
   checkPhotoCapacity?: () => Promise<void>;
   runtime?: { mode: "cloud" | "local"; sdkVersion?: string };
@@ -97,11 +99,12 @@ function id(v: unknown): string {
   );
   return s;
 }
-export function validateEnvelope(v: any): Envelope {
+export function validateEnvelope(v: any, photoBytes = false): Envelope {
   ensure(
     v &&
       v.version === 1 &&
       v.algorithm === "XCHACHA20-POLY1305" &&
+      (v.encoding === undefined || (photoBytes && v.encoding === "bytes")) &&
       Number.isSafeInteger(v.keyVersion) &&
       v.keyVersion > 0,
     "INVALID_ENVELOPE",
@@ -117,12 +120,15 @@ export function validateEnvelope(v: any): Envelope {
     "密文编码不正确",
   );
   ensure(ciphertext.length % 4 === 0, "INVALID_ENVELOPE", "密文编码长度不正确");
+  if (v.encoding === "bytes")
+    ensure(base64ByteLength(ciphertext) <= MAX_PHOTO_BYTES + 16, "FILE_TOO_LARGE", "照片超过 500 KB");
   return {
     version: 1,
     algorithm: "XCHACHA20-POLY1305",
     keyVersion: v.keyVersion,
     nonce,
     ciphertext,
+    ...(v.encoding === "bytes" ? { encoding: "bytes" } : {}),
   };
 }
 async function member(
@@ -191,6 +197,50 @@ export function createApi(deps: ServerDeps) {
     await tx.put(webRecoveryKeys, keyId, { id: keyId, spaceId: device.spaceId, publicKey: proof.recoveryPublicKey });
     if (user?.webInitialDevicePending === device.spaceId)
       await tx.put("users", userId, { ...user, webInitialDevicePending: null });
+  }
+  async function storeDevice(tx: Tx, userId: string, input: Record<string, unknown>) {
+    const spaceId = id(input.spaceId);
+    const deviceId = id(input.id);
+    const previous: Device | null = await tx.get("devices", deviceId);
+    ensure(!previous || (previous.userId === userId && previous.status === "active" && previous.spaceId === spaceId),
+      "DEVICE_REVOKED", "设备标识已被撤销或占用");
+    const encryptionPublicKey = str(input.encryptionPublicKey, 44);
+    const signingPublicKey = str(input.signingPublicKey, 44);
+    ensure(/^[A-Za-z0-9+/]{43}=$/.test(encryptionPublicKey) && /^[A-Za-z0-9+/]{43}=$/.test(signingPublicKey),
+      "INVALID_KEY", "公钥格式不正确");
+    ensure(!previous || (previous.encryptionPublicKey === encryptionPublicKey && previous.signingPublicKey === signingPublicKey),
+      "KEY_CHANGED", "禁止替换已有设备公钥");
+    const sharedOnly = previous ? previous.sharedOnly : input.sharedOnly === true;
+    const registration: WebDevice = { spaceId, id: deviceId, encryptionPublicKey, signingPublicKey,
+      label: str(input.label, 50), ...(sharedOnly ? { sharedOnly: true } : {}) };
+    if (deps.webDeviceChallenges)
+      await verifyWebEnrollment(tx, userId, registration, previous, input.proof as WebDeviceProof | undefined);
+    const device: Device = { ...registration, userId, status: "active", createdAt: previous?.createdAt || now() };
+    await tx.put("devices", deviceId, device);
+    return device;
+  }
+  async function invitationSpace(tx: Pick<Tx, "get">, tokenHash: string, userId: string) {
+    const invitation = await tx.get("invitations", tokenHash);
+    ensure(invitation && !invitation.usedBy && invitation.expiresAt > now(),
+      "INVITE_EXPIRED", "邀请已过期或已经使用");
+    const space = await tx.get("spaces", invitation.spaceId) as Space | null;
+    ensure(space?.status === "active" && !space.members.includes(userId), "INVALID_INVITE", "此邀请不可使用");
+    ensure(space.members.length < 2, "SPACE_FULL", "这个空间已经住了两个人");
+    return { invitation, space };
+  }
+  async function completedEnrollment(tx: Tx, userId: string, input: Record<string, unknown>) {
+    const user = await tx.get("users", userId);
+    if (user?.spaceId !== input.spaceId || user?.webEnrollmentDevice !== input.id) return;
+    const space = await member(tx, id(input.spaceId), userId, false, now());
+    await storeDevice(tx, userId, input);
+    return space;
+  }
+  async function bindInitialDevice(tx: Tx, userId: string, input: Record<string, unknown>) {
+    ensure(input.sharedOnly !== true && input.proof, "DEVICE_PROOF_INVALID", "首次登记需要完整的设备与恢复签名");
+    const device = await storeDevice(tx, userId, input);
+    ensure(!device.sharedOnly, "DEVICE_PROOF_INVALID", "首次登记需要完整的个人密钥");
+    const user = await tx.get("users", userId);
+    await tx.put("users", userId, { ...user, webEnrollmentDevice: device.id });
   }
   function receiptId(spaceId: string, userId: string, operationId: unknown) {
     return hash(JSON.stringify([spaceId, userId, id(operationId)]));
@@ -298,7 +348,7 @@ export function createApi(deps: ServerDeps) {
     input: any = {},
   ): Promise<ApiReply> {
     try {
-      ensure(userId, "AUTH_REQUIRED", "请先使用微信登录");
+      ensure(userId, "AUTH_REQUIRED", deps.webDeviceChallenges ? "请先登录网站" : "请先使用微信登录");
       ensure(
         input && typeof input === "object" && !Array.isArray(input),
         "INVALID_REQUEST",
@@ -318,7 +368,7 @@ export function createApi(deps: ServerDeps) {
         ensure(
           input.apiProtocol === API_PROTOCOL,
           "PROTOCOL_MISMATCH",
-          "请同时更新小程序与云函数，再执行此操作",
+          deps.webDeviceChallenges ? "请刷新网站以加载最新版本，再执行此操作" : "请同时更新小程序与云函数，再执行此操作",
         );
       if (action === "health") {
         result = {
@@ -334,7 +384,10 @@ export function createApi(deps: ServerDeps) {
         result = await repo.transaction(async (tx) => {
           const u = await tx.get("users", userId);
           const bound = u?.spaceId ? await tx.get("spaces", u.spaceId) : null;
-          if (bound?.status === "active") return { userId, space: bound };
+          if (bound?.status === "active") return {
+            userId, space: bound,
+            ...(deps.webDeviceChallenges ? { atomicEnrollment: true, initialDevicePending: u.webInitialDevicePending === bound.id } : {}),
+          };
           if (u?.spaceId)
             await tx.put("users", userId, {
               ...u,
@@ -349,13 +402,22 @@ export function createApi(deps: ServerDeps) {
           return {
             userId,
             space: readableSpace(closing, now()) ? closing : null,
+            ...(deps.webDeviceChallenges ? { atomicEnrollment: true } : {}),
           };
         });
+      } else if (action === "inspectInvitation" && deps.webDeviceChallenges) {
+        const { space } = await invitationSpace(repo, hash(str(input.token, 128)), userId);
+        result = { spaceId: space.id };
       } else if (action === "createSpace") {
         result = await repo.transaction(async (tx) => {
+          const enrolling = deps.webDeviceChallenges && input.initialDevice === true;
+          const completed = enrolling && await completedEnrollment(tx, userId, input);
+          if (completed) return completed;
           const u = await availableBinding(tx, userId);
+          const spaceId = enrolling ? id(input.spaceId) : deps.id();
+          ensure(!enrolling || !await tx.get("spaces", spaceId), "SPACE_ID_IN_USE", "空间编号已被使用");
           const s: Space = {
-            id: deps.id(),
+            id: spaceId,
             members: [userId],
             status: "active",
             keyVersion: 1,
@@ -365,25 +427,18 @@ export function createApi(deps: ServerDeps) {
           await tx.put("users", userId, {
             ...u, spaceId: s.id, ...(deps.webDeviceChallenges ? { webInitialDevicePending: s.id } : {}),
           });
+          if (enrolling) await bindInitialDevice(tx, userId, input);
           return s;
         });
       } else if (action === "joinSpace") {
         const tokenHash = hash(str(input.token, 128));
         result = await repo.transaction(async (tx) => {
-          const invitation = await tx.get("invitations", tokenHash);
-          ensure(
-            invitation && !invitation.usedBy && invitation.expiresAt > now(),
-            "INVITE_EXPIRED",
-            "邀请已过期或已经使用",
-          );
+          const enrolling = deps.webDeviceChallenges && input.initialDevice === true;
+          const completed = enrolling && await completedEnrollment(tx, userId, input);
+          if (completed) return completed;
+          const { invitation, space: s } = await invitationSpace(tx, tokenHash, userId);
+          ensure(!enrolling || s.id === input.spaceId, "INVALID_INVITE", "邀请码对应的空间已改变");
           const u = await availableBinding(tx, userId);
-          const s = await tx.get("spaces", invitation.spaceId);
-          ensure(
-            s && s.status === "active" && !s.members.includes(userId),
-            "INVALID_INVITE",
-            "此邀请不可使用",
-          );
-          ensure(s.members.length < 2, "SPACE_FULL", "这个空间已经住了两个人");
           s.members = [...s.members, userId];
           await tx.put("spaces", s.id, s);
           await tx.put("users", userId, {
@@ -394,55 +449,13 @@ export function createApi(deps: ServerDeps) {
             usedBy: userId,
             usedAt: now(),
           });
+          if (enrolling) await bindInitialDevice(tx, userId, input);
           return s;
         });
       } else if (action === "registerDevice") {
         result = await repo.transaction(async (tx) => {
-          await member(tx, input.spaceId, userId, true, now());
-          const dId = id(input.id);
-          const previous = await tx.get("devices", dId);
-          ensure(
-            !previous ||
-              (previous.userId === userId &&
-                previous.status === "active" &&
-                previous.spaceId === input.spaceId),
-            "DEVICE_REVOKED",
-            "设备标识已被撤销或占用",
-          );
-          const encryptionPublicKey = str(input.encryptionPublicKey, 44);
-          const signingPublicKey = str(input.signingPublicKey, 44);
-          ensure(
-            /^[A-Za-z0-9+/]{43}=$/.test(encryptionPublicKey) &&
-              /^[A-Za-z0-9+/]{43}=$/.test(signingPublicKey),
-            "INVALID_KEY",
-            "公钥格式不正确",
-          );
-          ensure(
-            !previous ||
-              (previous.encryptionPublicKey === encryptionPublicKey &&
-                previous.signingPublicKey === signingPublicKey),
-            "KEY_CHANGED",
-            "禁止替换已有设备公钥",
-          );
-          const registration: WebDevice = {
-            id: dId, spaceId: input.spaceId, encryptionPublicKey, signingPublicKey,
-            label: str(input.label, 50), ...(input.sharedOnly === true ? { sharedOnly: true } : {}),
-          };
-          if (deps.webDeviceChallenges)
-            await verifyWebEnrollment(tx, userId, registration, previous, input.proof);
-          const d: Device = {
-            id: dId,
-            spaceId: input.spaceId,
-            userId,
-            encryptionPublicKey,
-            signingPublicKey,
-            label: registration.label,
-            status: "active",
-            createdAt: previous?.createdAt || now(),
-            ...((previous ? previous.sharedOnly : input.sharedOnly === true) ? { sharedOnly: true } : {}),
-          };
-          await tx.put("devices", dId, d);
-          return d;
+          await member(tx, id(input.spaceId), userId, true, now());
+          return storeDevice(tx, userId, input);
         });
       } else {
         const spaceId = id(input.spaceId);
@@ -472,7 +485,7 @@ export function createApi(deps: ServerDeps) {
               const profile = await repo.get(webProfiles, hash(JSON.stringify([spaceId, memberId])));
               if (profile) profiles.push({ userId: memberId, envelope: profile.envelope });
             }
-            result = { ...space, profiles };
+            result = { ...space, profiles, binaryPhotos: true };
           }
         } else if (action === "setSpaceProfile" && deps.webDeviceChallenges) {
           const envelope = validateEnvelope(input.envelope);
@@ -838,7 +851,7 @@ export function createApi(deps: ServerDeps) {
           });
         } else if (action === "filePut") {
           requireDeviceVisibility(device, input.visibility);
-          const envelope = validateEnvelope(input.envelope);
+          const envelope = validateEnvelope(input.envelope, deps.webDeviceChallenges);
           const receipt = input.receipt === undefined ? undefined : photoReceipt(input.receipt);
           result = await storePhoto(spaceId, userId, input.visibility, envelope, receipt,
             deps.managedPhotos ? { deviceId: input.deviceId, ownerTrack: input.managed === true } : undefined);
@@ -885,7 +898,7 @@ export function createApi(deps: ServerDeps) {
           } else {
             ensure(stage?.receipt === receipt && stage.expiresAt > now(),
               "PHOTO_PART_MISSING", "照片分段缺失，请重新添加");
-            const envelope = validateEnvelope({ ...input.header, ciphertext: stage.ciphertext });
+            const envelope = validateEnvelope({ ...input.header, ciphertext: stage.ciphertext }, deps.webDeviceChallenges);
             result = await storePhoto(spaceId, userId, input.visibility, envelope, receipt,
               deps.managedPhotos ? { deviceId: input.deviceId, ownerTrack: input.managed === true } : undefined);
             await repo.transaction(async (tx) => {
@@ -915,9 +928,16 @@ export function createApi(deps: ServerDeps) {
             ensure(!file.managed || file.recordId || (file.creatorId === userId && file.attachUntil > now()),
               "FORBIDDEN", "照片尚未加入记录或已过期");
             ensure(deps.fileGet, "NOT_CONFIGURED", "文件服务尚未配置");
+            if (deps.webDeviceChallenges && input.cached === true)
+              return { success: true, data: { unchanged: true } };
             const part = input.part;
             ensure(part === undefined || (Number.isSafeInteger(part) && part >= 0 &&
               part < Math.ceil(1500000 / PHOTO_DOWNLOAD_PART_SIZE)), "INVALID_REQUEST", "照片分段编号不正确");
+            if (part !== undefined && deps.fileGetPart) {
+              const result = await deps.fileGetPart(file.storageId, part);
+              ensure(result, "INVALID_REQUEST", "照片分段编号不正确或照片已失效");
+              return { success: true, data: result };
+            }
             const envelope = JSON.parse(await deps.fileGet(file.storageId)) as Envelope;
             result = { envelope };
             if (part !== undefined) {
@@ -974,7 +994,7 @@ export function createApi(deps: ServerDeps) {
           ensure(
             deps.ai,
             "AI_NOT_CONFIGURED",
-            "还没有配置 AI 服务，请在云函数环境变量中设置服务地址、模型和密钥",
+            deps.webDeviceChallenges ? "当前网站尚未接入 AI 服务" : "还没有配置 AI 服务，请在云函数环境变量中设置服务地址、模型和密钥",
           );
           await repo.transaction(async (tx) => {
             const current = await member(tx, spaceId, userId);
@@ -1125,6 +1145,7 @@ export function createApi(deps: ServerDeps) {
           success: false,
           error: { code: error.code, message: error.message },
         };
+      deps.onInternalError?.(error);
       return {
         success: false,
         error: {

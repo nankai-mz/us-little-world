@@ -1,9 +1,10 @@
 import { hashText } from "./crypto";
-import { today } from "./date";
 import { AppError, type Attachment, type Entry } from "./types";
 import type { UsService } from "./service";
 
 export const wardrobeSlots = ["上装", "下装", "外套", "鞋履", "配饰"] as const;
+export const wardrobeNameLimit = 32;
+export const wardrobeWeatherLimit = 40;
 export type WardrobeSlot = typeof wardrobeSlots[number];
 type PublicItem = { id: string; name: string; slot: WardrobeSlot };
 export type WardrobeSelection = {
@@ -47,14 +48,26 @@ async function latest(service: UsService, partnerRequired = false) {
   return { space, me: secrets.userId };
 }
 
-export async function addWardrobeItem(service: UsService, name: string, slot: WardrobeSlot, photo?: Attachment) {
+export async function addWardrobeItem(
+  service: UsService, name: string, slot: WardrobeSlot, image?: Attachment | (() => Promise<Attachment>),
+) {
   const title = name.trim();
-  if (!isSlot(slot) || !title || [...title].length > 32)
+  if (!isSlot(slot) || !title || [...title].length > wardrobeNameLimit)
     throw new AppError("WARDROBE_ITEM", "请选择类别，并填写 1 至 32 字的衣物名称");
   await latest(service);
   if (!service.hasPrivateAccess) throw new AppError("PRIVATE_KEY_REQUIRED", "请先恢复本机私人记录密钥");
   if (privateWardrobe(service).length >= 24) throw new AppError("WARDROBE_LIMIT", "私人衣橱最多收纳 24 件衣物");
-  await service.save({ kind: "wardrobe-item", title, date: today(), category: slot, ...(photo ? { photos: [photo] } : {}) }, "private");
+  const session = service.secrets;
+  const photo = typeof image === "function" ? await image() : image;
+  try {
+    if (!session || session !== service.secrets) throw new AppError("LOCKED", "请先解锁");
+    await service.save({ kind: "wardrobe-item", title, date: service.day, category: slot, ...(photo ? { photos: [photo] } : {}) }, "private");
+  } catch (error) {
+    if (typeof image === "function" && photo?.fileId && session === service.secrets &&
+      error instanceof AppError && !["TIMEOUT", "NETWORK_ERROR", "INVALID_RESPONSE", "WRITE_UNCONFIRMED"].includes(error.code))
+      await service.call("fileDelete", { fileId: photo.fileId }).catch(() => {});
+    throw error;
+  }
 }
 
 export async function publishWardrobe(service: UsService, privateIds: string[], weather: string, previousEdition: number) {
@@ -64,7 +77,7 @@ export async function publishWardrobe(service: UsService, privateIds: string[], 
   const current = existing?.data.wardrobeSelection;
   if ((current?.edition ?? 0) !== previousEdition) throw new AppError("WARDROBE_CHANGED", "共享衣物已更新，请重新选择");
   if (!existing && !privateIds.length) return;
-  if (privateIds.length > 8 || new Set(privateIds).size !== privateIds.length || [...weather.trim()].length > 40)
+  if (privateIds.length > 8 || new Set(privateIds).size !== privateIds.length || [...weather.trim()].length > wardrobeWeatherLimit)
     throw new AppError("WARDROBE_LIMIT", "最多共享 8 件衣物，天气备注限 40 字");
   const selectionId = resourceId("selection", space.id, me);
   const wardrobe = privateWardrobe(service);
@@ -76,7 +89,7 @@ export async function publishWardrobe(service: UsService, privateIds: string[], 
   });
   const selection = { edition: previousEdition + 1, items, ...(items.length && weather.trim() ? { weather: weather.trim() } : {}) };
   await service.save(
-    { kind: "wardrobe-share", title: "衣橱共享", date: today(), wardrobeSelection: selection },
+    { kind: "wardrobe-share", title: "衣橱共享", date: service.day, wardrobeSelection: selection },
     "shared", existing, selectionId,
   );
 }
@@ -91,7 +104,7 @@ export async function suggestWardrobe(service: UsService, owner: string, selecte
     throw new AppError("WARDROBE_CHANGED", "请选择最新共享衣物，每个类别只能选一件");
   const existing = wardrobeSuggestion(service, me, owner);
   if ((existing?.revision ?? 0) !== revision) throw new AppError("WARDROBE_CHANGED", "已有更新的搭配，请刷新后查看");
-  await service.save({ kind: "wardrobe-suggestion", title: "搭配建议", date: today(),
+  await service.save({ kind: "wardrobe-suggestion", title: "搭配建议", date: service.day,
     wardrobeSuggestion: { selectionEdition: edition, selected } }, "shared", existing,
   resourceId("suggestion", space.id, me, owner, String(edition)));
 }

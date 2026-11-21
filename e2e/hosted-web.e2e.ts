@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { strFromU8, unzipSync } from "fflate";
 import { signIn, startReleaseFixture } from "./release-fixture";
 import { exerciseWebWorkload } from "./web-workload";
+import { spaceDay } from "../src/core/date";
 
 test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁", async ({}, info) => {
   test.setTimeout(240000);
@@ -98,16 +99,14 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
 
     await a.goto(`${origin}/app/home`);
     await expect(a.locator(".side-space strong")).toContainText("合成昵称");
-    await a.getByRole("button", { name: /写一篇日记/ }).click();
+    await expect(a.locator(".hero-avatars")).toContainText("合成昵称");
+    const photoPicker = a.waitForEvent("filechooser");
+    await a.getByRole("button", { name: /收藏新照片/ }).click();
+    await (await photoPicker).setFiles([]);
     await expect(a).toHaveURL(/\/app\/memories\/new$/);
     await a.getByLabel("这一页的小标题").fill("合成共同图文");
-    const pastDate = await a.evaluate(() => {
-      const now = new Date();
-      const month = String(now.getMonth() + 1).padStart(2, "0");
-      const day = String(now.getDate()).padStart(2, "0");
-      const offset = month === "02" && day === "29" ? 4 : 1;
-      return `${now.getFullYear() - offset}-${month}-${day}`;
-    });
+    const [year, month, date] = spaceDay().split("-");
+    const pastDate = `${Number(year) - (month === "02" && date === "29" ? 4 : 1)}-${month}-${date}`;
     await a.getByLabel("记录日期").fill(pastDate);
     const png = await a.evaluate(() => {
       const canvas = document.createElement("canvas");
@@ -225,10 +224,28 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
     await b.getByRole("heading", { name: "合成共同图文", exact: true }).click();
     const photoOnline = b.getByRole("dialog").getByRole("img", { name: "fixture.png" });
     await expect(photoOnline).toBeVisible();
-    const plaintextPhoto = (await photoOnline.getAttribute("src"))!.split(",")[1];
+    await expect(photoOnline).toHaveAttribute("src", /^blob:/);
+    const plaintextPhoto = await photoOnline.evaluate(async (image: HTMLImageElement) => {
+      const bytes = new Uint8Array(await (await fetch(image.src)).arrayBuffer());
+      return btoa(Array.from(bytes, (byte) => String.fromCharCode(byte)).join(""));
+    });
     const encryptedPhotos = await readCachedCiphertext(b, "photos");
     expect(encryptedPhotos.length).toBeGreaterThan(0);
     expect(encryptedPhotos.every((item) => !item.includes(plaintextPhoto) && !item.includes("fixture.png"))).toBe(true);
+    await b.getByRole("dialog").getByRole("button", { name: "关闭", exact: true }).click();
+    const authorizeCachedPhoto = b.waitForResponse((response) => {
+      const request = response.request();
+      const payload = request.url().endsWith("/api/space") && request.postDataJSON();
+      return payload?.action === "fileGet" && payload.data?.cached === true;
+    });
+    await b.goto(`${origin}/app/memories`);
+    expect(await (await authorizeCachedPhoto).json()).toMatchObject({ success: true, data: { unchanged: true } });
+    const cover = b.getByRole("button", { name: /合成共同图文/ }).getByRole("img", { name: "fixture.png" });
+    await expect(cover).toBeVisible();
+    const sharedUrl = await cover.getAttribute("src");
+    await b.getByRole("heading", { name: "合成共同图文", exact: true }).click();
+    await expect(photoOnline).toBeVisible();
+    await expect(photoOnline).toHaveAttribute("src", sharedUrl!);
     await b.getByRole("dialog").getByRole("button", { name: "关闭", exact: true }).click();
     async function inspectPhotoStorage(tab: Page, seed = false) {
       return tab.evaluate(async (addFixtures) => {
@@ -248,8 +265,9 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
               if (!addFixtures) return;
               const existing = request.result[0];
               const large = "synthetic-photo-ciphertext".repeat(350000);
-              store.put({ ...existing, fileId: "quota-older", updatedAt: Date.now() - 3000, payload: large });
-              store.put({ ...existing, fileId: "quota-newer", updatedAt: Date.now() - 2000, payload: large });
+              for (const row of request.result) store.delete([row.account, row.scope, row.fileId]);
+              store.put({ ...existing, fileId: "quota-older", updatedAt: Date.now() - 3000, payload: large, byteSize: large.length });
+              store.put({ ...existing, fileId: "quota-newer", updatedAt: Date.now() - 2000, payload: large, byteSize: large.length });
             };
             transaction.oncomplete = () => resolve({
               ids: request.result.map(({ fileId }) => fileId),
@@ -261,6 +279,7 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
       }, seed);
     }
     await inspectPhotoStorage(b, true);
+    await b.goto(`${origin}/app/memories`);
     await b.getByRole("heading", { name: "合成共同图文", exact: true }).click();
     await expect(photoOnline).toBeVisible();
     const retained = await inspectPhotoStorage(b);
@@ -278,7 +297,7 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
         .map((request) => new URL(request.url).pathname)))).flat();
     });
     expect(filesCachedByWorker).toContain("/offline-shell.html");
-    expect(filesCachedByWorker.every((path) => path === "/offline-shell.html" ||
+    expect(filesCachedByWorker.every((path) => path === "/offline-shell.html" || path === "/__us-shell-installed" ||
       path === "/manifest.webmanifest" || path.startsWith("/assets/"))).toBe(true);
     // Engine network emulation is not applied to service worker sessions, so the fixture
     // must also stop forwarding: otherwise the worker answers navigations from the live
@@ -318,6 +337,12 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
     await b.getByRole("button", { name: "解锁离线日记" }).click();
     await expect(b.getByRole("heading", { name: "待同步日记（2）" })).toBeVisible();
     await expect(b.getByText("离线重开后的私人日记", { exact: true })).toBeVisible();
+    const pendingOnDisk = b.getByRole("region", { name: "本机待同步日记" });
+    const pendingTitle = pendingOnDisk.getByText("离线重开后的私人日记", { exact: true });
+    const pendingPrivate = pendingOnDisk.locator("details").filter({ has: b.getByText("离线重开后的私人日记", { exact: true }) });
+    await pendingTitle.click();
+    await pendingPrivate.getByText("查看离线照片", { exact: true }).click();
+    await expect(pendingPrivate.getByRole("img", { name: "offline-private.png" })).toBeVisible();
     await b.getByRole("button", { name: "锁定离线日记" }).click();
     await expect(b.getByRole("heading", { name: "合成共同图文" })).toHaveCount(0);
     await b.clock.setFixedTime(new Date(Date.now() + 25 * 3600000));
@@ -452,12 +477,8 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
     await expect(a.getByRole("heading", { name: "我们之间的安全感" })).toBeVisible();
 
     await Promise.all([a.goto(`${origin}/app/home`), b.goto(`${origin}/app/home`)]);
-    await expect(a.getByRole("region", { name: "站内想你" })).toHaveCount(0);
-    await expect(b.getByRole("region", { name: "那年今日" })).toHaveCount(0);
+    await expect(a.getByRole("region", { name: "站内想你" })).toBeVisible();
     for (const tab of [a, b]) {
-      await tab.goto(`${origin}/app/settings`);
-      await tab.getByRole("checkbox", { name: /站内陪伴/ }).check();
-      await tab.goto(`${origin}/app/home`);
       await expect(tab.getByRole("region", { name: "那年今日" }).getByRole("button", { name: /第一位更新的标题/ })).toBeVisible();
     }
     await a.getByRole("button", { name: "发送想你" }).click();
@@ -474,10 +495,6 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
     await expect(b.getByText(/对方想你/)).toHaveCount(0);
 
     for (const tab of [a, b]) {
-      await tab.goto(`${origin}/app/settings`);
-      const mealSwitch = tab.getByRole("checkbox", { name: /今天吃什么/ });
-      await expect(mealSwitch).not.toBeChecked();
-      await mealSwitch.check();
       await tab.goto(`${origin}/app/play/food`);
     }
     async function addMeal(tab: Page, name: string, price: string, tags: string) {
@@ -511,10 +528,6 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
     await expect(a.getByRole("dialog").locator(".detail-body")).toHaveText("预计预算 24 元");
 
     for (const tab of [a, b]) {
-      await tab.goto(`${origin}/app/settings`);
-      const wardrobeSwitch = tab.getByRole("checkbox", { name: /今天穿什么/ });
-      await expect(wardrobeSwitch).not.toBeChecked();
-      await wardrobeSwitch.check();
       await tab.goto(`${origin}/app/play/wardrobe`);
     }
     await a.getByLabel("衣物名称").fill("合成白衬衫");
@@ -635,6 +648,10 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
       await a.getByRole("button", { name: "收藏到我们的小世界" }).click();
       await expect(a.getByRole("dialog")).toHaveCount(0);
     }
+    await b.goto(`${origin}/app/settings`);
+    const galaxyPreference = b.getByRole("checkbox", { name: /回忆银河/ });
+    await expect(galaxyPreference).toBeChecked();
+    await galaxyPreference.uncheck();
     await b.goto(`${origin}/app/memories/galaxy`);
     await expect(b.getByRole("button", { name: "前往设置" })).toBeVisible();
     await b.getByRole("button", { name: "前往设置" }).click();

@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import type { Repository, Tx } from "./api";
 import type { CipherRecord } from "../core/types";
+import { PHOTO_DOWNLOAD_PART_SIZE } from "../core/photos";
 import type { WebSync } from "./web-sync";
 
 export function openWebRepository(filename: string) {
@@ -37,6 +38,16 @@ export function openWebRepository(filename: string) {
   const put = db.prepare("INSERT OR REPLACE INTO documents VALUES (?, ?, ?)");
   const remove = db.prepare("DELETE FROM documents WHERE collection = ? AND id = ?");
   const readPhoto = db.prepare("SELECT data FROM photos WHERE path = ?");
+  const readPhotoPart = db.prepare(`
+    SELECT json_extract(data, '$.version') AS version,
+           json_extract(data, '$.algorithm') AS algorithm,
+           json_extract(data, '$.keyVersion') AS keyVersion,
+           json_extract(data, '$.nonce') AS nonce,
+           json_extract(data, '$.encoding') AS encoding,
+           substr(json_extract(data, '$.ciphertext'), ?, ?) AS ciphertext,
+           length(json_extract(data, '$.ciphertext')) AS total
+    FROM photos WHERE path = ?
+  `);
   const writePhoto = db.prepare("INSERT OR REPLACE INTO photos VALUES (?, ?)");
   const deletePhoto = db.prepare("DELETE FROM photos WHERE path = ?");
   const advanceHistory = db.prepare("UPDATE web_history SET generation = generation + 1 WHERE slot = 1");
@@ -99,9 +110,9 @@ export function openWebRepository(filename: string) {
         `$.${key}`, typeof value === "boolean" ? Number(value) : value as string | number | null,
       ]);
       const rows = db.prepare(
-        "SELECT data FROM documents WHERE collection = ?" + conditions + " ORDER BY id LIMIT ? OFFSET ?",
+        "SELECT id, data FROM documents WHERE collection = ?" + conditions + " ORDER BY id LIMIT ? OFFSET ?",
       ).all(collection, ...bindings, limit, offset);
-      return rows.map((row) => JSON.parse(String(row.data)));
+      return rows.map((row) => ({ ...JSON.parse(String(row.data)), id: String(row.id) }));
     }),
     transaction,
   };
@@ -150,6 +161,14 @@ export function openWebRepository(filename: string) {
       const row = readPhoto.get(path);
       if (!row) throw new Error("Encrypted photo missing");
       return String(row.data);
+    }),
+    fileGetPart: (path: string, part: number) => serial(() => {
+      const row = readPhotoPart.get(part * PHOTO_DOWNLOAD_PART_SIZE + 1, PHOTO_DOWNLOAD_PART_SIZE, path);
+      if (!row?.ciphertext || row.version !== 1 || row.algorithm !== "XCHACHA20-POLY1305") return;
+      const envelope = { version: row.version, algorithm: row.algorithm, keyVersion: Number(row.keyVersion),
+        nonce: String(row.nonce), ciphertext: String(row.ciphertext),
+        ...(row.encoding === "bytes" ? { encoding: "bytes" as const } : {}) } as const;
+      return { envelope, parts: Math.ceil(Number(row.total) / PHOTO_DOWNLOAD_PART_SIZE) };
     }),
     fileDelete: (path: string) => transaction(() => tx.deletePhoto(path)),
     close: () => db.close(),

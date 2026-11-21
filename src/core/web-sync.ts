@@ -10,11 +10,12 @@ export type SyncPage = {
   more: boolean;
 };
 
-export type CipherSnapshot = { records: CipherRecord[]; cursor: string; writeKeyVersion?: number };
+export type CipherSnapshot = { records: CipherRecord[]; cursor: string; writeKeyVersion?: number; binaryPhotos?: boolean };
 export interface CipherCache {
   readonly enabled: boolean;
   read(scope: string): Promise<CipherSnapshot | undefined>;
   write(scope: string, snapshot: CipherSnapshot): Promise<void>;
+  readPhoto?(scope: string, fileId: string): Promise<Envelope | undefined>;
   writePhoto(scope: string, fileId: string, envelope: Envelope): Promise<void>;
   clear(): Promise<void>;
 }

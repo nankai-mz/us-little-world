@@ -1,7 +1,28 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { prepareBrowserPhoto } from "../web/photos";
+import { randomBytes } from "node:crypto";
+import { decryptPhotoBytes, newSecrets } from "../src/core/crypto";
+import { preparePhotoWrite } from "../src/core/photo-write";
+import { MAX_PHOTO_BYTES } from "../src/core/photos";
 
 afterEach(() => vi.unstubAllGlobals());
+
+it("照片二进制密文减少 Base64 开销，并兼容旧照片及保持授权绑定", async () => {
+  const rng = async (size: number) => randomBytes(size);
+  const secrets = await newSecrets(rng, "fixture", "fixture-space");
+  const bytes = new Uint8Array(await rng(MAX_PHOTO_BYTES));
+  const old = await preparePhotoWrite(bytes, "image/png", "旧照片", "private", secrets, 1, rng);
+  const next = await preparePhotoWrite(bytes, "image/png", "新照片", "private", secrets, 1, rng, true);
+  expect(next.envelope).toMatchObject({ encoding: "bytes" });
+  expect(next.envelope.ciphertext.length).toBe(4 * Math.ceil((MAX_PHOTO_BYTES + 16) / 3));
+  expect(next.envelope.ciphertext.length / old.envelope.ciphertext.length).toBeLessThan(0.76);
+  for (const { envelope, photo } of [old, next]) {
+    expect(Buffer.from(decryptPhotoBytes(envelope, secrets, photo.id, "private")).equals(bytes)).toBe(true);
+    expect(() => decryptPhotoBytes(envelope, { ...secrets, sharedOnly: true }, photo.id, "private")).toThrow();
+  }
+  const { encoding: _encoding, ...unmarked } = next.envelope;
+  expect(() => decryptPhotoBytes(unmarked, secrets, next.photo.id, "private")).toThrow();
+});
 
 it("由文件内容识别照片，小图也重编码且释放位图和画布", async () => {
   const file = new File([Uint8Array.of(0xff, 0xd8, 0xff, 0xe1)], "phone.jpg");

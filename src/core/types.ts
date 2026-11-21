@@ -26,6 +26,7 @@ export interface Envelope {
   keyVersion: number;
   nonce: string;
   ciphertext: string;
+  encoding?: "bytes";
 }
 export interface RecordMeta {
   id: string;
@@ -146,6 +147,7 @@ export interface Secrets {
   userId: string;
   recoveryKey?: string;
   trustedDevices?: Record<string, string>;
+  webSetup?: { kind: "create"; title: string; date: string } | { kind: "join"; token: string };
 }
 export interface Vault {
   version: 1;

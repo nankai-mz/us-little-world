@@ -19,7 +19,7 @@ const photoStore = "photos";
 // may already hold Blob payloads; both shapes are read for compatibility.
 type CachedPayload = string | Blob;
 type CachedSnapshot = { account: string; scope: string; updatedAt: number; payload: CachedPayload };
-type CachedPhoto = CachedSnapshot & { fileId: string };
+type CachedPhoto = CachedSnapshot & { fileId: string; byteSize: number };
 const encoder = new TextEncoder();
 const payloadBytes = (payload: CachedPayload) =>
   typeof payload === "string" ? encoder.encode(payload).length : payload.size;
@@ -48,6 +48,7 @@ export async function readOfflineSnapshot(account: string, secrets: Secrets) {
     return {
       records: saved.snapshot.records,
       writeKeyVersion: Number.isSafeInteger(keyVersion) && keyVersion && secrets.spaceKeys[keyVersion] ? keyVersion : undefined,
+      binaryPhotos: saved.snapshot.binaryPhotos === true,
       verifiedAt: saved.updatedAt,
       expiresAt: saved.updatedAt + offlineAge,
     };
@@ -56,20 +57,23 @@ export async function readOfflineSnapshot(account: string, secrets: Secrets) {
 
 export async function readOfflinePhoto(account: string, secrets: Secrets, fileId: string) {
   if (!offlineEnabled(account)) return;
+  const saved = await readPhoto(account, cipherSnapshotScope(secrets), fileId);
+  return offlineEnabled(account) ? saved : undefined;
+}
+
+async function readPhoto(account: string, scope: string, fileId: string) {
   const saved: CachedPhoto | undefined = await useStore("readonly",
-    (store) => store.get([account, cipherSnapshotScope(secrets), fileId]), photoStore);
+    (store) => store.get([account, scope, fileId]), photoStore);
   const now = Date.now();
-  if (!saved || saved.updatedAt > now || now - saved.updatedAt >= offlineAge || !offlineEnabled(account)) return;
+  if (!saved || saved.updatedAt > now || now - saved.updatedAt >= offlineAge) return;
   return { envelope: JSON.parse(await payloadText(saved.payload)) as Envelope, expiresAt: saved.updatedAt + offlineAge };
 }
 
-async function useStore<T>(
-  mode: IDBTransactionMode,
-  operation: (store: IDBObjectStore) => IDBRequest<T>,
-  name = storeName,
-): Promise<T> {
-  const db = await new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open("us-web-cipher", 2);
+let connection: Promise<IDBDatabase> | undefined;
+function openCache() {
+  if (connection) return connection;
+  connection = new Promise<IDBDatabase>((resolve, reject) => {
+    const request = indexedDB.open("us-web-cipher", 3);
     request.onupgradeneeded = (event) => {
       if (event.oldVersion < 1) {
         const store = request.result.createObjectStore(storeName, { keyPath: ["account", "scope"] });
@@ -79,18 +83,43 @@ async function useStore<T>(
         const store = request.result.createObjectStore(photoStore, { keyPath: ["account", "scope", "fileId"] });
         store.createIndex("byAccount", "account");
       }
+      const photos = request.transaction!.objectStore(photoStore);
+      photos.createIndex("usage", ["account", "updatedAt", "byteSize"]);
+      if (event.oldVersion === 2) {
+        const cursor = photos.openCursor();
+        cursor.onsuccess = () => {
+          const row = cursor.result;
+          if (!row) return;
+          row.update({ ...row.value, byteSize: payloadBytes(row.value.payload) });
+          row.continue();
+        };
+      }
     };
-    request.onsuccess = () => resolve(request.result);
+    request.onsuccess = () => {
+      const db = request.result;
+      db.onversionchange = () => { db.close(); connection = undefined; };
+      db.onclose = () => { connection = undefined; };
+      resolve(db);
+    };
     request.onerror = () => reject(request.error);
+  }).catch((error) => {
+    connection = undefined;
+    throw error;
   });
-  try {
-    return await new Promise<T>((resolve, reject) => {
-      const transaction = db.transaction(name, mode);
-      const request = operation(transaction.objectStore(name));
-      transaction.oncomplete = () => resolve(request.result);
-      transaction.onabort = () => reject(transaction.error);
-    });
-  } finally { db.close(); }
+  return connection;
+}
+async function useStore<T>(
+  mode: IDBTransactionMode,
+  operation: (store: IDBObjectStore) => IDBRequest<T>,
+  name = storeName,
+): Promise<T> {
+  const db = await openCache();
+  return new Promise<T>((resolve, reject) => {
+    const transaction = db.transaction(name, mode);
+    const request = operation(transaction.objectStore(name));
+    transaction.oncomplete = () => resolve(request.result);
+    transaction.onabort = () => reject(transaction.error);
+  });
 }
 
 export function createCipherCache(account: string, enabled: () => boolean): CipherCache {
@@ -132,24 +161,33 @@ export function createCipherCache(account: string, enabled: () => boolean): Ciph
       }
       await replace({ account, scope, updatedAt: Date.now(), payload });
     },
+    async readPhoto(scope, fileId) {
+      return enabled() ? (await readPhoto(account, scope, fileId))?.envelope : undefined;
+    },
     async writePhoto(scope, fileId, envelope) {
       const payload = JSON.stringify(envelope);
-      if (!enabled() || payloadBytes(payload) > maxPhotoBytes) return;
+      const byteSize = payloadBytes(payload);
+      if (!enabled() || byteSize > maxPhotoBytes) return;
       await useStore("readwrite", (store) => {
-        const request = store.index("byAccount").getAll(account);
+        const now = Date.now();
+        let bytes = byteSize;
+        const range = IDBKeyRange.bound([account], [account, []], false, true);
+        const request = store.index("usage").openKeyCursor(range, "prev");
         request.onsuccess = () => {
           if (!enabled()) return;
-          const now = Date.now();
-          let bytes = payloadBytes(payload);
-          const items = (request.result as CachedPhoto[]).sort((a, b) => b.updatedAt - a.updatedAt);
-          for (const item of items) {
-            if (item.scope === scope && item.fileId === fileId) continue;
-            if (item.scope !== scope || item.updatedAt > now || now - item.updatedAt >= offlineAge ||
-              bytes + payloadBytes(item.payload) > maxPhotoBytes) {
-              store.delete([account, item.scope, item.fileId]);
-            } else bytes += payloadBytes(item.payload);
+          const row = request.result;
+          if (!row) {
+            store.put({ account, scope, fileId, updatedAt: now, byteSize, payload });
+            return;
           }
-          store.put({ account, scope, fileId, updatedAt: now, payload });
+          const [, oldScope, oldId] = row.primaryKey as string[];
+          const [, updatedAt, size] = row.key as [string, number, number];
+          if (oldScope !== scope || oldId !== fileId) {
+            if (oldScope !== scope || updatedAt > now || now - updatedAt >= offlineAge || bytes + size > maxPhotoBytes)
+              store.delete(row.primaryKey);
+            else bytes += size;
+          }
+          row.continue();
         };
         return request;
       }, photoStore);

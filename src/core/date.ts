@@ -1,6 +1,15 @@
 export function today(now = new Date()): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`;
 }
+let spaceCalendar: Intl.DateTimeFormat | undefined;
+export function spaceDay(now = new Date()): string {
+  spaceCalendar ??= new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit",
+  });
+  const parts = spaceCalendar.formatToParts(now);
+  const value = (part: string) => parts.find(({ type }) => type === part)?.value;
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
 export function dayNumber(date: string): number {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date))
     throw new Error("日期格式应为 YYYY-MM-DD");

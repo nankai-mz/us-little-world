@@ -17,7 +17,7 @@ import type { SyncPage } from "../src/core/web-sync";
 import { markRecordChange, syncRecords } from "../src/server/web-sync";
 import { today } from "../src/core/date";
 import { UsService } from "../src/core/service";
-import { AppError, type CipherRecord, type Transport } from "../src/core/types";
+import { AppError, type CipherRecord, type Envelope, type Transport } from "../src/core/types";
 import { App } from "../web/App";
 import { CLOSING_GRACE_MS, runMaintenance } from "../src/server/lifecycle";
 import { openWebRepository } from "../src/server/web-repository";
@@ -78,20 +78,30 @@ it("网页双账号支持配对、换机、加密照片同步和在线快照恢�
     expect(cookie).toContain("HttpOnly; SameSite=Strict");
     return cookie.split(";")[0];
   }
-  function client(name: keyof typeof accounts, cookie: () => string) {
-    const values = new Map<string, string>();
+  function client(name: keyof typeof accounts, cookie: () => string, fault?: { rejectSetup?: boolean; dropAfter?: string; rejectDevice?: string }, values = new Map<string, string>()) {
     const transport: Transport = {
       webDeviceChallenges: true,
       webRecordSync: true,
-      async call<T>(action: string, data = {}) {
+      async call<T>(action: string, data: Record<string, unknown> = {}) {
+        if (fault?.rejectDevice === action) {
+          delete fault.rejectDevice;
+          data = { ...data, proof: { ...(data.proof as object), signature: "invalid-test-signature" } };
+        }
         const reply = await (await post("/api/space", { action, data }, name, cookie())).json();
         if (!reply.success) throw new AppError(reply.error.code, reply.error.message);
+        if (fault?.dropAfter === action) {
+          delete fault.dropAfter;
+          throw new AppError("NETWORK_ERROR", "合成回执丢失");
+        }
         return reply.data as T;
       },
     };
     return new UsService(transport, {
       get: (key) => values.get(key) ?? null,
-      set: (key, value) => { values.set(key, value); },
+      set: (key, value) => {
+        if (fault?.rejectSetup && key === "webSetupVault") throw new AppError("LOCAL_STORAGE_UNAVAILABLE", "合成存储限制");
+        values.set(key, value);
+      },
       remove: (key) => { values.delete(key); },
     }, async (size) => randomBytes(size));
   }
@@ -113,25 +123,53 @@ it("网页双账号支持配对、换机、加密照片同步和在线快照恢�
     expect((await fetch(`${origin}/app/unknown`)).status).toBe(404);
     expect((await fetch(`${origin}/api/unknown`)).status).toBe(404);
     expect((await post("/api/login", { name: "stranger", password: accounts.first })).status).toBe(401);
+    for (let attempt = 0; attempt < 10; attempt++)
+      expect((await post("/api/login", { name: "stranger", password: accounts.first })).status).toBe(attempt < 9 ? 401 : 429);
     expect((await post("/api/space", { action: "bootstrap" })).status).toBe(401);
     let firstCookie = await login("first");
     let secondCookie = await login("second");
     expect((await post("/api/space", { action: "bootstrap" }, "first", secondCookie)).status).toBe(401);
     expect((await post("/api/space", { action: "bootstrap" }, "first", firstCookie, "https://example.test")).status).toBe(403);
-    const first = client("first", () => firstCookie);
-    const second = client("second", () => secondCookie);
+    const firstFault: { rejectSetup?: boolean; dropAfter?: string } = { rejectSetup: true };
+    const secondFault: { rejectDevice?: string } = {};
+    const firstValues = new Map<string, string>();
+    const secondValues = new Map<string, string>();
+    let first = client("first", () => firstCookie, firstFault, firstValues);
+    let second = client("second", () => secondCookie, secondFault, secondValues);
     const firstPass = "first local unlock phrase";
     const secondPass = "second local unlock phrase";
     await expect(second.setUpDevice(secondPass)).rejects.toMatchObject({ code: "MEMBER_REQUIRED" });
     const forbidden = await post("/api/space", { action: "createSpace" }, "second", secondCookie);
     expect(forbidden.status).toBe(403);
     expect(await forbidden.json()).toMatchObject({ error: { code: "FORBIDDEN" } });
-    await first.create(firstPass, "双端联调空间", "2025-10-10");
+    await expect(first.create(firstPass, "合成创建", "2025-10-10")).rejects.toMatchObject({ code: "LOCAL_STORAGE_UNAVAILABLE" });
+    expect(await first.transport.call("bootstrap")).toMatchObject({ space: null });
+    firstFault.rejectSetup = false;
+    firstFault.dropAfter = "createSpace";
+    await expect(first.create(firstPass, "合成创建", "2025-10-10")).rejects.toMatchObject({ code: "NETWORK_ERROR" });
+    expect(first.enrollmentPending).toBe(true);
+    expect(JSON.stringify([...firstValues])).not.toContain("合成创建");
+    const committedSpace = await first.transport.call<{ space: { id: string } }>("bootstrap");
+    first = client("first", () => firstCookie, undefined, firstValues);
+    await first.unlock(firstPass);
+    expect(first.enrollmentPending).toBe(false);
+    expect(first.space!.id).toBe(committedSpace.space.id);
+    expect(first.active.filter(({ data }) => data.category === "relationship").map(({ data }) => [data.title, data.date]))
+      .toEqual([["合成创建", "2025-10-10"]]);
+    expect(first.hasPrivateAccess).toBe(true);
     const { token } = await first.call<{ token: string }>("createInvitation");
     await expect(second.join(secondPass, "invalid")).rejects.toMatchObject({ code: "INVITE_EXPIRED" });
     expect(second.secrets).toBeNull();
     expect(second.space).toBeNull();
-    await second.join(secondPass, token);
+    secondFault.rejectDevice = "joinSpace";
+    await expect(second.join(secondPass, token)).rejects.toMatchObject({ code: "DEVICE_PROOF_INVALID" });
+    expect(second.enrollmentPending).toBe(true);
+    expect(JSON.stringify([...secondValues])).not.toContain(token);
+    expect(await second.transport.call("bootstrap")).toMatchObject({ space: null });
+    second = client("second", () => secondCookie, undefined, secondValues);
+    await second.unlock(secondPass);
+    expect(second.enrollmentPending).toBe(false);
+    expect(second.hasPrivateAccess).toBe(true);
     expect(second.space?.id).toBe(first.space?.id);
     expect(second.space?.members).toEqual([first.userId, second.userId]);
     expect(second.ready).toBe(false);
@@ -167,8 +205,8 @@ it("网页双账号支持配对、换机、加密照片同步和在线快照恢�
         html.match(/class="mood-row"[\s\S]*?(?=<span class="mood-(?:sun|cloud)">)/g);
       const firstView = render(first, true);
       const secondView = render(second, false);
-      expect(firstView).toContain('class="avatar small a">臻');
-      expect(secondView).toContain('class="avatar small b">悦');
+      expect(firstView).toContain('class="avatar small a" aria-label="打开我的空间">臻');
+      expect(secondView).toContain('class="avatar small b" aria-label="打开我的空间">悦');
       const firstMood = expect.stringMatching(/avatar a">臻.*有些累/);
       const secondMood = expect.stringMatching(/avatar b">悦.*很开心/);
       expect(moods(firstView)).toEqual([firstMood, secondMood]);
@@ -273,6 +311,17 @@ it("网页双账号支持配对、换机、加密照片同步和在线快照恢�
     const photoData = b64(randomBytes(500 * 1024));
     const photo = await first.addPhoto(photoData, "image/jpeg", "测试照片", "shared");
     const shared = await first.save({ kind: "memory", title: "共享记录", date: "2025-10-10", photos: [photo] }, "shared");
+    const full = await second.call<{ envelope: Envelope }>("fileGet", { fileId: photo.fileId });
+    expect(full.envelope.encoding).toBe("bytes");
+    const firstPart = await second.call<{ parts: number; envelope: Envelope }>("fileGet", { fileId: photo.fileId, part: 0 });
+    expect(firstPart.parts).toBeGreaterThan(1);
+    let ciphertext = firstPart.envelope.ciphertext;
+    for (let part = 1; part < firstPart.parts; part++) {
+      const response = await second.call<typeof firstPart>("fileGet", { fileId: photo.fileId, part });
+      expect(response).toMatchObject({ parts: firstPart.parts, envelope: { encoding: "bytes", nonce: full.envelope.nonce } });
+      ciphertext += response.envelope.ciphertext;
+    }
+    expect(ciphertext).toBe(full.envelope.ciphertext);
     const page = await second.call<{ records: CipherRecord[]; nextAfter: string | null }>("listRecords", { after: "" });
     expect(page.nextAfter).toBeNull();
     expect(page.records.some(({ id }) => id === shared.id)).toBe(true);

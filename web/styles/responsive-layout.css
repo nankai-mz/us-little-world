@@ -1,0 +1,1111 @@
+@media (min-width: 1450px) {
+  .content {
+    padding-top: 38px;
+  }
+  .home-top,
+  .home-bottom {
+    grid-template-columns: 1.9fr 1fr;
+  }
+  .together-card {
+    min-height: 300px;
+  }
+  .hero-avatars {
+    margin-top: 24px;
+  }
+  .hero-bottom {
+    margin-top: 22px;
+  }
+  .memory-open > img,
+  .memory-open > .text-cover {
+    height: 210px;
+  }
+  .pet-illustration {
+    height: 295px;
+  }
+  .memory-copy {
+    padding: 17px 19px 19px;
+  }
+  .memory-copy h3 {
+    font-size: 13px;
+  }
+  .memory-copy p {
+    font-size: 12px;
+    line-height: 1.9;
+    min-height: 41px;
+  }
+  .memory-copy .meta {
+    font-size: 12px;
+  }
+  .quick-actions > button {
+    padding: 21px 20px;
+  }
+  .quick-actions strong {
+    font-size: 12px;
+  }
+  .quick-actions small {
+    font-size: 12px;
+  }
+  .mood-card {
+    padding: 26px;
+  }
+  .mood-row {
+    padding: 16px 0;
+  }
+  .mood-row strong {
+    font-size: 12px;
+  }
+  .mood-bubble {
+    font-size: 12px;
+  }
+  .mood-card .soft-note {
+    margin-top: 10px;
+  }
+  .together-number {
+    font-size: 70px;
+  }
+  .page-heading h1 {
+    font-size: 30px;
+  }
+}
+@media (max-width: 1180px) {
+  .sidebar {
+    width: 190px;
+    padding: 30px 18px;
+  }
+  .app-shell > main {
+    margin-left: 190px;
+    width: calc(100% - 190px);
+  }
+  .brand > div {
+    font-size: 13px;
+  }
+  .brand small {
+    font-size: 12px;
+  }
+  .content {
+    padding: 26px 25px 0;
+  }
+  .topbar {
+    padding: 0 25px;
+  }
+  .home-top,
+  .home-bottom {
+    grid-template-columns: 1.5fr 1fr;
+    gap: 17px;
+  }
+  .quick-actions {
+    gap: 9px;
+  }
+  .quick-actions > button {
+    padding: 14px 11px;
+    gap: 9px;
+  }
+  .quick-actions > button > svg {
+    display: none;
+  }
+  .quick-actions small {
+    font-size: 12px;
+  }
+  .quick-actions strong {
+    font-size: 12px;
+  }
+  .quick-icon {
+    height: 31px;
+    width: 31px;
+  }
+  .quick-icon svg {
+    height: 18px;
+    width: 18px;
+  }
+  .page-heading .date-pill {
+    display: none;
+  }
+  .section-title .title-note {
+    display: none;
+  }
+  .memory-grid {
+    gap: 12px;
+  }
+  .memory-copy {
+    padding: 12px;
+  }
+  .memory-copy h3 {
+    font-size: 12px;
+  }
+  .memory-copy p {
+    font-size: 12px;
+  }
+  .pet-illustration {
+    height: 232px;
+  }
+  .cards-grid,
+  .game-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stats-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+  .toolbar {
+    gap: 12px;
+  }
+  .pills > button {
+    padding: 9px 11px;
+    font-size: 12px;
+  }
+  .pet-page {
+    grid-template-columns: 1fr 1fr;
+  }
+  .pet-room-large {
+    min-height: 400px;
+  }
+  .card {
+    padding: 24px;
+  }
+  .timeline-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .welcome-form {
+    padding: 60px 10%;
+  }
+  .welcome-copy h1 {
+    font-size: 34px;
+  }
+  .welcome-art {
+    padding: 40px 8%;
+  }
+}
+@media (max-width: 900px) {
+  .sidebar {
+    width: 170px;
+    padding: 27px 14px;
+  }
+  .brand {
+    gap: 10px;
+  }
+  .brand-mark {
+    font-size: 40px;
+  }
+  .brand > div {
+    font-size: 12px;
+  }
+  .brand small {
+    font-size: 12px;
+  }
+  .nav-item {
+    font-size: 12px;
+    padding: 13px;
+    gap: 11px;
+  }
+  .app-shell > main {
+    margin-left: 170px;
+    width: calc(100% - 170px);
+  }
+  .content {
+    padding: 24px 20px 0;
+  }
+  .home-top {
+    grid-template-columns: 1fr;
+  }
+  .mood-card {
+    padding: 17px 20px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 15px;
+  }
+  .mood-card > .section-title {
+    grid-column: 1/-1;
+    margin-bottom: 3px;
+  }
+  .mood-card > .soft-note {
+    grid-column: 1/-1;
+    margin-top: 8px;
+    padding-bottom: 0;
+  }
+  .mood-row {
+    padding: 9px 0;
+  }
+  .mood-sun,
+  .mood-cloud {
+    display: none;
+  }
+  .mood-row strong .tiny {
+    font-size: 12px;
+  }
+  .home-bottom {
+    grid-template-columns: 1fr;
+  }
+  .quick-actions {
+    grid-template-columns: repeat(2, 1fr);
+    margin-bottom: 25px;
+  }
+  .quick-actions > button {
+    padding: 17px 15px;
+  }
+  .quick-actions strong {
+    font-size: 12px;
+  }
+  .quick-actions small {
+    font-size: 12px;
+  }
+  .quick-icon {
+    width: 37px;
+    height: 37px;
+  }
+  .memory-open > img,
+  .memory-open > .text-cover {
+    height: 180px;
+  }
+  .memory-copy h3 {
+    font-size: 12px;
+  }
+  .memory-copy p {
+    font-size: 12px;
+  }
+  .daily-prompt {
+    padding: 15px;
+    gap: 12px;
+  }
+  .daily-prompt .text-button {
+    font-size: 0;
+    gap: 0;
+  }
+  .daily-prompt .text-button svg {
+    width: 19px;
+    height: 19px;
+  }
+  .daily-prompt p {
+    font-size: 12px;
+  }
+  .ai-layout,
+  .map-layout,
+  .roulette-layout,
+  .pet-page,
+  .profile-layout {
+    grid-template-columns: 1fr;
+  }
+  .pet-room-large {
+    min-height: 350px;
+    height: 390px;
+  }
+  .pet-room-large > img {
+    padding: 30px 20px 0;
+  }
+  .pet-page-heading {
+    top: 22px;
+    left: 23px;
+  }
+  .pet-page-heading h2 {
+    font-size: 20px;
+  }
+  .pet-page-heading p {
+    font-size: 12px;
+  }
+  .pet-page-heading .eyebrow {
+    font-size: 12px;
+  }
+  .profile-card {
+    padding: 30px;
+    display: flex;
+    align-items: center;
+    flex-direction: column;
+  }
+  .profile-card .xlarge {
+    height: 65px;
+    width: 65px;
+  }
+  .album-grid {
+    grid-template-columns: 1fr 1fr;
+  }
+  .feature-banner {
+    padding: 23px;
+    gap: 20px;
+  }
+  .feature-banner h2 {
+    font-size: 20px;
+  }
+  .feature-banner p {
+    font-size: 12px;
+  }
+  .feature-banner > svg {
+    width: 42px;
+  }
+  .welcome {
+    grid-template-columns: 1fr 1fr;
+  }
+  .welcome-art {
+    padding: 35px 9%;
+  }
+  .welcome-copy h1 {
+    font-size: 28px;
+    letter-spacing: 2px;
+  }
+  .welcome-art .brand {
+    margin-bottom: 70px;
+  }
+  .welcome-copy > p {
+    font-size: 12px;
+  }
+  .welcome-copy > img {
+    height: 230px;
+  }
+  .welcome-form h2 {
+    font-size: 22px;
+  }
+  .welcome-form {
+    padding: 60px 9%;
+  }
+  .private-label {
+    font-size: 12px;
+  }
+  .top-actions {
+    gap: 6px;
+  }
+  .page-heading h1 {
+    font-size: 24px;
+  }
+}
+@media (max-width: 640px) {
+  body {
+    padding-bottom: calc(68px + env(safe-area-inset-bottom, 0px));
+  }
+  .sidebar {
+    display: none;
+  }
+  .app-shell > main {
+    margin: 0;
+    width: 100%;
+  }
+  .topbar {
+    height: calc(56px + env(safe-area-inset-top, 0px));
+    padding: env(safe-area-inset-top, 0px) 20px 0;
+  }
+  .breadcrumb {
+    font-size: 12px;
+    gap: 8px;
+  }
+  .top-actions {
+    gap: 4px;
+  }
+  .private-label {
+    font-size: 12px;
+    margin-right: 0;
+  }
+  .top-actions .small {
+    display: none;
+  }
+  .content {
+    padding: 23px 18px 0;
+  }
+  .page-heading {
+    margin-bottom: 22px;
+  }
+  .page-heading .eyebrow {
+    font-size: 12px;
+    letter-spacing: 1.5px;
+  }
+  .page-heading h1 {
+    font-size: 22px;
+    margin-top: 7px;
+    letter-spacing: 0.4px;
+  }
+  .heading-flower {
+    font-size: 23px;
+    margin-left: 8px;
+  }
+  .page-heading > div > p {
+    font-size: 12px;
+  }
+  .home-top {
+    gap: 16px;
+  }
+  .together-card {
+    min-height: 280px;
+    padding: 20px 22px 0;
+  }
+  .hero-avatars {
+    margin-top: 20px;
+  }
+  .hero-since {
+    display: block;
+    font-size: 12px;
+  }
+  .hero-doodle {
+    left: -55px;
+    width: 150px;
+    bottom: 6px;
+  }
+  .together-number {
+    font-size: 65px;
+  }
+  .together-number > i {
+    font-size: 12px;
+    left: calc(100% + 8px);
+  }
+  .hero-bottom {
+    font-size: 12px;
+    margin-top: 18px;
+    padding: 12px 0;
+  }
+  .mood-card {
+    border-radius: 12px;
+    padding: 16px 17px 12px;
+    gap: 9px;
+  }
+  .mood-row {
+    gap: 8px;
+  }
+  .mood-row .avatar {
+    height: 29px;
+    width: 29px;
+    font-size: 12px;
+  }
+  .mood-row strong {
+    font-size: 12px;
+  }
+  .mood-row strong .tiny {
+    display: none;
+  }
+  .mood-bubble {
+    font-size: 12px;
+    padding: 6px 8px;
+    gap: 6px;
+  }
+  .mood-card .section-title h2 {
+    font-size: 12px;
+  }
+  .quick-actions {
+    margin: 18px 0 25px;
+    gap: 10px;
+  }
+  .quick-actions > button {
+    padding: 14px 11px;
+    gap: 10px;
+  }
+  .quick-actions strong {
+    font-size: 12px;
+  }
+  .quick-actions small {
+    font-size: 12px;
+  }
+  .quick-icon {
+    width: 32px;
+    height: 32px;
+    border-radius: 9px;
+  }
+  .memory-grid {
+    gap: 12px;
+  }
+  .memory-open > img,
+  .memory-open > .text-cover {
+    height: 135px;
+  }
+  .memory-copy {
+    padding: 11px 12px 15px;
+  }
+  .memory-copy h3 {
+    font-size: 12px;
+    white-space: normal;
+    min-height: 36px;
+    line-height: 1.8;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+  }
+  .memory-copy p {
+    font-size: 12px;
+    min-height: 29px;
+    line-height: 1.8;
+  }
+  .meta {
+    font-size: 12px;
+    margin-bottom: 8px;
+  }
+  .meta > span:last-child {
+    font-size: 12px;
+  }
+  .tags {
+    gap: 5px;
+    margin-top: 9px;
+  }
+  .tags > span {
+    font-size: 12px;
+    padding: 3px 4px;
+  }
+  .memory-heart {
+    right: 8px;
+    bottom: 14px;
+  }
+  .memory-heart svg {
+    width: 13px;
+    height: 13px;
+  }
+  .section-title > h2 {
+    font-size: 13px;
+  }
+  .section-title .text-button {
+    font-size: 12px;
+  }
+  .home-tip {
+    font-size: 12px;
+    letter-spacing: 0;
+    margin-top: 13px;
+  }
+  .daily-prompt {
+    margin-top: 23px;
+    padding: 15px 13px;
+    gap: 12px;
+  }
+  .daily-prompt .eyebrow {
+    font-size: 12px;
+  }
+  .daily-prompt p {
+    font-size: 12px;
+    line-height: 1.8;
+    margin-top: 4px;
+  }
+  .daily-icon {
+    width: 34px;
+    height: 34px;
+    flex-shrink: 0;
+  }
+  .daily-icon svg {
+    height: 18px;
+  }
+  .daily-prompt .text-button svg {
+    height: 15px;
+  }
+  .app-footer {
+    margin-top: 24px;
+    padding: 19px 0 22px;
+    font-size: 12px;
+    gap: 13px;
+  }
+  .app-footer > span:first-child {
+    max-width: 190px;
+  }
+  .app-footer > span:last-child {
+    font-size: 12px;
+    gap: 5px;
+    white-space: nowrap;
+  }
+  .mobile-nav {
+    display: flex;
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: calc(67px + env(safe-area-inset-bottom, 0px));
+    background: var(--paper);
+    border-top: 1px solid var(--line);
+    z-index: 20;
+    justify-content: space-around;
+    padding: 0 env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  }
+  .mobile-nav > button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    gap: 6px;
+    width: 20%;
+    color: var(--muted);
+    font-size: 12px;
+  }
+  .mobile-nav > button.active {
+    color: var(--ink);
+  }
+  .mobile-nav > button.active:before {
+    content: "";
+    position: absolute;
+    top: 0;
+    height: 2px;
+    width: 20px;
+    background: var(--rose-bg);
+    border-radius: 3px;
+  }
+  .mobile-nav svg {
+    height: 20px;
+    width: 20px;
+  }
+  .toolbar {
+    margin-bottom: 20px;
+    gap: 15px;
+    align-items: center;
+  }
+  .toolbar > .primary {
+    font-size: 12px;
+    padding: 10px 13px;
+    min-height: 35px;
+    margin-left: auto;
+  }
+  .pills {
+    gap: 4px;
+  }
+  .pills > button {
+    padding: 9px 11px;
+    font-size: 12px;
+    border-radius: 7px;
+  }
+  .toolbar > .pills {
+    gap: 3px;
+  }
+  .filter-row {
+    align-items: flex-start;
+    flex-wrap: wrap;
+    gap: 13px;
+  }
+  .pills.small > button {
+    font-size: 12px;
+    padding: 7px 10px;
+  }
+  .search {
+    width: 100%;
+  }
+  .search input {
+    width: 100%;
+    padding: 10px 0;
+  }
+  .filter-detail {
+    gap: 9px;
+    margin-top: 13px;
+  }
+  .filter-detail label {
+    font-size: 12px;
+    gap: 5px;
+  }
+  .filter-detail input {
+    width: 112px;
+    padding: 7px;
+  }
+  .filter-detail label:nth-child(3) {
+    width: calc(100% - 38px);
+  }
+  .filter-detail label:nth-child(3) input {
+    flex: 1;
+  }
+  .filter-detail > .text-button {
+    font-size: 12px;
+  }
+  .timeline-grid {
+    gap: 14px;
+    margin-top: 18px;
+  }
+  .timeline-grid .memory-open > img {
+    height: 140px;
+  }
+  .feature-banner {
+    padding: 23px 18px;
+    gap: 17px;
+    margin-bottom: 21px;
+    border-radius: 12px;
+  }
+  .feature-banner > .eyebrow {
+    font-size: 12px;
+  }
+  .feature-banner h2 {
+    font-size: 18px;
+    line-height: 1.7;
+    letter-spacing: 0.4px;
+    margin: 7px 0;
+  }
+  .feature-banner p {
+    font-size: 12px;
+  }
+  .feature-banner > svg {
+    width: 32px;
+    height: 42px;
+  }
+  .feature-banner .eyebrow {
+    font-size: 12px;
+    letter-spacing: 1px;
+  }
+  .map-count {
+    display: none;
+  }
+  .cards-grid {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .capsule-card {
+    padding: 24px;
+    min-height: 230px;
+  }
+  .capsule-card h3 {
+    margin-top: 35px;
+  }
+  .album-grid {
+    gap: 17px;
+  }
+  .polaroid {
+    padding: 8px 8px 14px;
+  }
+  .polaroid img {
+    margin-bottom: 9px;
+  }
+  .polaroid > span {
+    font-size: 12px;
+  }
+  .polaroid > small {
+    font-size: 12px;
+    margin-top: 5px;
+  }
+  .map-layout {
+    gap: 24px;
+  }
+  .illustrated-map {
+    min-height: 320px;
+  }
+  .map-privacy p {
+    font-size: 12px;
+  }
+  .place-row {
+    padding: 17px 0;
+  }
+  .card {
+    padding: 23px 20px;
+  }
+  .report-cover {
+    padding: 29px 18px;
+  }
+  .report-cover h2 {
+    font-size: 48px;
+  }
+  .report-cover h2 > span {
+    font-size: 23px;
+  }
+  .report-cover p {
+    font-size: 12px;
+  }
+  .stats-grid {
+    gap: 10px;
+    margin: 22px 0 28px;
+  }
+  .stats-grid > div {
+    padding: 19px 3px;
+  }
+  .stats-grid strong {
+    font-size: 28px;
+  }
+  .stats-grid span {
+    font-size: 12px;
+  }
+  .report-page .section-title .tiny {
+    font-size: 12px;
+  }
+  .report-actions {
+    gap: 10px;
+    margin-top: 23px;
+  }
+  .report-actions .primary,
+  .report-actions .secondary {
+    font-size: 12px;
+    padding: 10px 12px;
+  }
+  .report-actions .text-button {
+    font-size: 12px;
+  }
+  .game-grid {
+    gap: 13px;
+  }
+  .game-card {
+    padding: 18px 15px;
+  }
+  .game-icon {
+    padding: 12px;
+    border-radius: 12px;
+    margin-bottom: 15px;
+  }
+  .game-icon svg {
+    width: 22px;
+    height: 22px;
+  }
+  .game-card h3 {
+    font-size: 13px;
+    margin-bottom: 10px;
+  }
+  .game-card p {
+    font-size: 12px;
+    min-height: 50px;
+  }
+  .game-card > span:last-child {
+    font-size: 12px;
+    margin-top: 19px;
+    padding-top: 12px;
+  }
+  .game-card > span:last-child svg {
+    height: 12px;
+    width: 12px;
+  }
+  .pet-page-heading {
+    top: 20px;
+    left: 20px;
+  }
+  .pet-room-large {
+    height: 360px;
+    min-height: 360px;
+  }
+  .pet-page-heading h2 {
+    font-size: 22px;
+  }
+  .pet-room-large > img {
+    padding: 70px 10px 5px;
+  }
+  .pet-level {
+    font-size: 12px;
+    bottom: 15px;
+  }
+  .pet-page {
+    gap: 20px;
+  }
+  .pet-page > .card > h2 {
+    font-size: 18px;
+  }
+  .question-page {
+    padding: 30px 22px;
+    margin: 20px auto;
+  }
+  .question-page h2 {
+    font-size: 19px;
+  }
+  .question-page > .eyebrow {
+    font-size: 12px;
+  }
+  .question-page > .muted {
+    font-size: 12px;
+  }
+  .question-decoration {
+    margin: 23px 0 15px;
+  }
+  .question-actions {
+    gap: 17px;
+  }
+  .question-actions button {
+    font-size: 12px;
+  }
+  .quiz-options {
+    gap: 12px;
+  }
+  .quiz-options > button {
+    padding: 14px 12px;
+    font-size: 12px;
+    line-height: 1.8;
+    text-align: left;
+  }
+  .roulette-layout h2 {
+    font-size: 20px;
+  }
+  .roulette-card .eyebrow {
+    font-size: 12px;
+  }
+  .wheel {
+    height: 220px;
+    width: 220px;
+  }
+  .wheel-pointer {
+    top: 133px;
+  }
+  .profile-card {
+    padding: 27px 20px;
+  }
+  .profile-card h2 {
+    font-size: 21px;
+    margin: 17px 0 12px;
+  }
+  .profile-card > .muted {
+    font-size: 12px;
+  }
+  .settings-row {
+    padding: 19px 0;
+    gap: 13px;
+  }
+  .settings-row strong {
+    font-size: 12px;
+  }
+  .settings-row small {
+    font-size: 12px;
+  }
+  .settings-icon {
+    height: 34px;
+    width: 34px;
+  }
+  .settings-icon svg {
+    width: 18px;
+    height: 18px;
+  }
+  .profile-note p {
+    font-size: 12px;
+  }
+  .overlay {
+    padding: 12px;
+    align-items: center;
+  }
+  .modal {
+    padding: 27px 22px;
+    max-height: 88vh;
+    border-radius: 15px;
+  }
+  .modal > h2 {
+    font-size: 21px;
+  }
+  .modal > .eyebrow {
+    font-size: 12px;
+  }
+  .modal > .muted {
+    font-size: 12px;
+  }
+  .modal .close {
+    right: 13px;
+    top: 14px;
+  }
+  .modal .field {
+    margin: 18px 0;
+  }
+  .field > span:first-child {
+    font-size: 12px;
+  }
+  .field > input,
+  .field > select {
+    padding: 11px;
+  }
+  input:not([type="checkbox"], [type="radio"]), select, textarea {
+    font-size: max(16px, 1rem) !important;
+  }
+  .editor-meta {
+    gap: 12px;
+  }
+  .editor-meta .field {
+    min-width: 0;
+  }
+  .editor-footer {
+    flex-direction: column;
+    gap: 17px;
+    align-items: stretch;
+  }
+  .editor-footer > .fineprint {
+    justify-content: center;
+  }
+  .upload-button > small {
+    width: 100%;
+    font-size: 12px;
+    margin-left: 0;
+  }
+  .detail-body {
+    font-size: 12px;
+  }
+  .detail-actions {
+    gap: 15px;
+  }
+  .detail-actions .secondary,
+  .detail-actions .text-button {
+    font-size: 12px;
+  }
+  .recovery-code {
+    padding: 15px;
+    font-size: 12px;
+    letter-spacing: 0.5px;
+  }
+  .welcome {
+    grid-template-columns: 1fr;
+    min-height: 100vh;
+  }
+  .welcome-art {
+    padding: 28px 25px 18px;
+  }
+  .welcome-art .brand {
+    margin-bottom: 26px;
+  }
+  .welcome-art .brand-mark {
+    font-size: 41px;
+  }
+  .welcome-art .brand > div {
+    font-size: 14px;
+  }
+  .welcome-art .brand small {
+    font-size: 12px;
+  }
+  .welcome-copy {
+    position: relative;
+    padding-bottom: 6px;
+  }
+  .welcome-copy > .eyebrow {
+    font-size: 12px;
+    letter-spacing: 1.4px;
+  }
+  .welcome-copy h1 {
+    font-size: 27px;
+    margin: 13px 0 12px;
+    letter-spacing: 2px;
+    position: relative;
+    z-index: 1;
+  }
+  .welcome-copy p {
+    font-size: 12px;
+    line-height: 2.3;
+    position: relative;
+    z-index: 1;
+    max-width: 230px;
+  }
+  .welcome-copy img {
+    position: absolute;
+    right: -15px;
+    bottom: -4px;
+    width: 150px;
+    height: 190px;
+    opacity: 0.8;
+  }
+  .welcome-foot {
+    justify-content: flex-start;
+    font-size: 12px;
+    margin-top: 15px;
+  }
+  .welcome-foot svg {
+    width: 11px;
+  }
+  .welcome-form {
+    padding: 30px 28px;
+  }
+  .welcome-form > .flower {
+    width: 28px;
+    height: 28px;
+    margin-bottom: 17px;
+  }
+  .welcome-form h2 {
+    font-size: 21px;
+    margin-bottom: 12px;
+  }
+  .welcome-form > .muted {
+    font-size: 12px;
+    margin-bottom: 13px;
+  }
+  .welcome-form > .primary,
+  .welcome-form > .secondary {
+    padding: 13px;
+    font-size: 12px;
+  }
+  .welcome-form .fineprint {
+    font-size: 12px;
+    margin-top: 17px;
+  }
+  .welcome-note {
+    margin-top: 25px;
+    padding-top: 20px;
+    font-size: 12px;
+  }
+  .toast {
+    bottom: 82px;
+    font-size: 12px;
+    padding: 12px 18px;
+    max-width: 90vw;
+    width: max-content;
+  }
+  .empty-state {
+    min-height: 250px;
+  }
+  .empty-state h3 {
+    font-size: 14px;
+  }
+  .empty-state p {
+    font-size: 12px;
+  }
+}

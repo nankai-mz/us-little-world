@@ -1,0 +1,103 @@
+@media (max-width: 900px) {
+  .topic-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+:root[data-motion="reduced"] *,
+:root[data-motion="reduced"] *::before,
+:root[data-motion="reduced"] *::after {
+  animation: none !important;
+  transition: none !important;
+  scroll-behavior: auto !important;
+}
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion]) *,
+  :root:not([data-motion]) *::before,
+  :root:not([data-motion]) *::after {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+.wheel > div {
+  transition: transform 1.5s cubic-bezier(0.15, 0.9, 0.2, 1);
+}
+.detail-body {
+  font-size: 16px;
+  line-height: 1.9;
+  color: var(--ink);
+}
+.memory-copy p {
+  font-size: 15px;
+  line-height: 1.85;
+  color: var(--muted);
+}
+.closing-notice {
+  padding: 20px;
+  margin-bottom: 24px;
+  border: 1px solid var(--rose);
+  border-radius: 14px;
+  background: var(--rose-bg);
+  line-height: 1.8;
+}
+.closing-notice h2 {
+  font-size: 18px;
+  margin: 0 0 10px;
+}
+.closing-notice p {
+  font-size: 14px;
+  margin: 0 0 16px;
+}
+.closing-notice button {
+  margin-right: 14px;
+  min-height: 44px;
+}
+.demo-session-ended {
+  font-size: 15px;
+  line-height: 1.9;
+}
+.text-cover > p {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  max-height: 5.4em;
+  line-height: 1.8;
+}
+@media (max-width: 600px) {
+  .topic-grid {
+    grid-template-columns: 1fr;
+  }
+  .question-toolbar {
+    gap: 8px;
+  }
+  .question-toolbar button {
+    flex: 1 1 42%;
+    justify-content: center;
+    font-size: 12px;
+    padding: 10px 8px;
+  }
+  .question-room .question-page {
+    padding: 30px 20px;
+  }
+  .primary,
+  .secondary {
+    min-height: 44px;
+  }
+  .topic-note {
+    padding: 18px;
+  }
+  .memory-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .text-cover {
+    padding: 22px;
+  }
+  .hero-bottom {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .hero-bottom > span:first-child {
+    white-space: nowrap;
+  }
+}

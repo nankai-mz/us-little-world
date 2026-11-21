@@ -18,15 +18,15 @@ export function buildGalaxy(entries: Entry[]): GalaxyStar[] {
     if (memory.deletedAt || memory.visibility !== "shared" || memory.data.kind !== "memory") continue;
     const year = memory.data.date.slice(0, 4);
     const group = memory.data.date.slice(0, 7);
-    const groupHash = hashText(group);
+    const month = Math.max(0, Math.min(11, Number(group.slice(5)) - 1 || 0));
     for (const photo of memory.data.photos ?? []) {
       if ((!photo.fileId && !photo.sample) || stars.has(photo.id)) continue;
       const hash = hashText(JSON.stringify([photo.id, group]));
       stars.set(photo.id, {
         id: photo.id, memory, photo, year, group,
-        x: 4 + (Number.parseInt(hash.slice(0, 6), 16) % 9200) / 100,
+        x: 4 + (month + (Number.parseInt(hash.slice(0, 6), 16) % 600) / 1000 + 0.2) * (92 / 12),
         y: 5 + (Number.parseInt(hash.slice(6, 12), 16) % 9000) / 100,
-        color: Number.parseInt(groupHash.slice(0, 2), 16) % 4,
+        color: Math.floor(month / 3),
       });
     }
   }
