@@ -29,31 +29,24 @@ export function createTransport(
         : 1;
       const timeoutMs = options.timeoutMs ?? ACTION_TIMEOUT_MS.get(action) ?? 15000;
       for (let attempt = 0; attempt < attempts; attempt++) {
-        const controller = options.hosted && typeof AbortController !== "undefined" ? new AbortController() : undefined;
+        const controller = typeof AbortController === "function" ? new AbortController() : undefined;
         let timer: ReturnType<typeof setTimeout> | undefined;
         let raw: unknown;
         try {
-          raw = await Promise.race([
-            invoke(action, data, controller?.signal),
-            new Promise((_, reject) => {
-              timer = setTimeout(
-                () => {
-                  reject(
-                    new AppError(
-                      "TIMEOUT",
-                      READ_ACTIONS.has(action)
-                        ? "连接超时，请稍后刷新"
-                        : action === "filePut"
-                          ? "照片上传未收到确认，当前未加入日记。请在网络稳定后重试"
-                          : "操作结果尚未确认，请联网刷新后查看，避免重复提交",
-                    ),
-                  );
-                  controller?.abort();
-                },
-                timeoutMs,
-              );
-            }),
-          ]);
+          const deadline = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              const error = new AppError("TIMEOUT", READ_ACTIONS.has(action)
+                ? "连接超时，请稍后刷新"
+                : action === "filePut"
+                  ? "照片上传未收到确认，当前未加入日记。请在网络稳定后重试"
+                  : "操作结果尚未确认，请联网刷新后查看，避免重复提交");
+              // Settle with the timeout before aborting fetch, which may reject immediately.
+              reject(error);
+              controller?.abort();
+            }, timeoutMs);
+          });
+          // Some adapters, including wx.cloud.callFunction, cannot consume the signal.
+          raw = await Promise.race([deadline, Promise.resolve().then(() => invoke(action, data, controller?.signal))]);
         } catch (error) {
           if (
             attempt + 1 < attempts &&

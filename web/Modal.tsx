@@ -23,24 +23,22 @@ export function Modal({
     document.body.style.overflow = "hidden";
     ref.current?.focus();
     const listener = (e: KeyboardEvent) => {
+      const dialog = ref.current;
+      if (!dialog || [...document.querySelectorAll('[aria-modal="true"]')].at(-1) !== dialog) return;
       if (e.key === "Escape") closeRef.current();
       if (e.key === "Tab") {
-        const focusables = [...(ref.current?.querySelectorAll<HTMLElement>(
-          'button:not(:disabled),input:not(:disabled),textarea:not(:disabled),select:not(:disabled),summary,[tabindex="0"],a[href]',
-        ) ?? [])].filter((element) => element.tabIndex >= 0 && element.getClientRects().length > 0);
-        if (!focusables?.length) return;
+        const focusables = [...dialog.querySelectorAll<HTMLElement>(
+          'button,input,textarea,select,details > summary:first-of-type,[tabindex],a[href]',
+        )].filter((element) => !element.matches(":disabled") && !element.closest("[inert]") &&
+          (element.tabIndex >= 0 || (element.tagName === "SUMMARY" && !element.hasAttribute("tabindex"))) &&
+          element.getClientRects().length > 0 && getComputedStyle(element).visibility === "visible");
+        if (!focusables.length) { e.preventDefault(); return; }
         const first = focusables[0];
         const last = focusables[focusables.length - 1];
-        if (
-          e.shiftKey &&
-          (document.activeElement === first ||
-            document.activeElement === ref.current)
-        ) {
+        const active = document.activeElement;
+        if (!active || !dialog.contains(active) || active === dialog || (e.shiftKey ? active === first : active === last)) {
           e.preventDefault();
-          last.focus();
-        } else if (!e.shiftKey && document.activeElement === last) {
-          e.preventDefault();
-          first.focus();
+          (e.shiftKey ? last : first).focus();
         }
       }
     };
@@ -69,7 +67,6 @@ export function Modal({
         <button className="icon-button close" onClick={close} aria-label="关闭">
           <X size={20} />
         </button>
-        <span className="eyebrow">A LITTLE SOMETHING FOR US</span>
         <h2>{title}</h2>
         {subtitle && <p className="muted">{subtitle}</p>}
         {children}

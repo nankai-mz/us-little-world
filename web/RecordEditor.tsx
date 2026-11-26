@@ -1,11 +1,14 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowRight, ImagePlus, LockKeyhole, X } from "lucide-react";
 import { addDays } from "../src/core/date";
+import { receiptOf, rebaseJournalEdit } from "../src/core/keepsakes";
+import { mealNameLimit, meals } from "../src/core/meal-plan";
 import type { UsService } from "../src/core/service";
 import { AppError, type Entry, type Payload, type Visibility } from "../src/core/types";
 import { Field } from "./Field";
 import { prepareBrowserPhoto } from "./photos";
 import { SharedMemoryPhoto } from "./SharedMemoryPhoto";
+import { MealSlip, RecordPaper } from "./PaperObjects";
 
 export const moodOptions = [
   "很开心",
@@ -18,6 +21,7 @@ export const moodOptions = [
 
 export function RecordEditor({
   kind,
+  photoMode = false,
   initialTitle,
   service,
   existing,
@@ -27,6 +31,7 @@ export function RecordEditor({
   dirty,
 }: {
   kind: string;
+  photoMode?: boolean;
   initialTitle: string;
   service: UsService;
   existing?: Entry;
@@ -37,7 +42,7 @@ export function RecordEditor({
 }) {
   const isRelationship =
     kind === "relationship" || existing?.data.category === "relationship";
-  const draftSlot = existing ? `draft:edit:${existing.id}` : "draft";
+  const draftSlot = existing ? `draft:edit:${existing.id}` : photoMode ? "draft:photo" : "draft";
   const isMemory = kind === "memory";
   const [{ draft, draftUnavailable }] = useState(() => {
     try {
@@ -58,6 +63,7 @@ export function RecordEditor({
     draft?.form ||
       existing?.data || {
         kind: isRelationship ? "anniversary" : (kind as Payload["kind"]),
+        ...(photoMode ? { photoPage: true as const } : {}),
         ...(isRelationship ? { category: "relationship" } : {}),
         title: isRelationship ? "我们的小世界" : initialTitle,
         body: "",
@@ -77,6 +83,20 @@ export function RecordEditor({
   const [failedPhotos, setFailedPhotos] = useState<{ file: File; message: string }[]>([]);
   const [queuedPhotos, setQueuedPhotos] = useState<Awaited<ReturnType<UsService["prepareQueuedPhoto"]>>[]>([]);
   const photoCount = (form.photos?.length ?? 0) + queuedPhotos.length;
+  const photoPage = isMemory && !!form.photoPage;
+  const receipt = receiptOf(form);
+  const invalidTemplate = (photoPage && !photoCount) || photoCount > 6 || (!!receipt && !receipt.dish.trim());
+  function editReceipt(meal: string, dish: string) {
+    set({ title: meal + "吃" + dish, mealReceipt: { ...receipt, meal, dish } });
+  }
+  function completedForm(): Payload {
+    if (form.mealReceipt && form.mealReceipt.dish.trim() !== form.mealReceipt.dish) {
+      const dish = form.mealReceipt.dish.trim();
+      return { ...form, title: form.mealReceipt.meal + "吃" + dish, mealReceipt: { ...form.mealReceipt, dish } };
+    }
+    if (!photoPage || form.title.trim()) return form;
+    return { ...form, title: form.body?.trim().split(/\r?\n/)[0].slice(0, 80) || form.date.replaceAll("-", ".") + " 的照片" };
+  }
   const [saved, setSaved] = useState("");
   const generation = useRef(0);
   const saving = useRef<Promise<void>>(Promise.resolve());
@@ -142,165 +162,8 @@ export function RecordEditor({
       setPhotosBusy(false);
     }
   };
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (busy || photosBusy || conflict || service.hasPendingSave || queuedPhotos.length > 0) return;
-        run(
-          async () => {
-            if (form.kind === "capsule" && form.unlockDate! < service.day && form.unlockDate !== existing?.data.unlockDate)
-              throw new AppError("INVALID_DATE", "请选择今天或之后的开启日期");
-            clearTimeout(draftTimer.current);
-            await saving.current;
-            if (isMemory) {
-              await service.saveDraft({ form, visibility, base }, draftSlot);
-              setPersisted({ form, visibility, base });
-            }
-            try {
-              await service.save(form, visibility, base, undefined, true);
-            } catch (error) {
-              if (error instanceof AppError && error.code === "REVISION_CONFLICT") {
-                setLatest(null);
-                setConflict(true);
-              }
-              throw error;
-            }
-            if (isMemory) service.storage.remove(draftSlot);
-            done();
-          },
-          isRelationship
-            ? "恋爱开始日期已更新，首页天数已重新计算"
-            : "这份温柔，已经好好收藏",
-        );
-      }}
-    >
-      {service.hasPendingSave && <div className="notice" role="status">
-        上一次保存尚未确认。先核对该次保存，再提交新的内容。
-        <button type="button" className="text-button" disabled={busy} onClick={() => run(async () => {
-          const confirmed = await service.resumePendingSave();
-          if (confirmed && isMemory && (existing?.id === confirmed.id || !existing && confirmed.expectedRevision === 0)) {
-            const remote = service.entries.find((entry) => entry.id === confirmed.id);
-            if (remote && JSON.stringify(remote.data) === JSON.stringify(form)) service.storage.remove(draftSlot);
-          }
-          done();
-        }, "已核对上一次保存")}>核对并继续原保存</button>
-      </div>}
-      {conflict && <div className="notice" role="status">
-        另一台设备已更新这条记录，你的编辑仍保留。
-        <button type="button" className="text-button" disabled={busy} onClick={() => run(async () => {
-          await service.refresh();
-          const current = service.active.find((entry) => entry.id === existing?.id);
-          if (!current) throw new AppError("RECORD_UNAVAILABLE", "这条记录已移出时间线，请先核对回收站");
-          setLatest(current);
-        })}>查看最新版本</button>
-        {latest && <div>
-          <strong>{latest.data.title}</strong><p>{latest.data.body}</p>
-          <button type="button" className="text-button" onClick={() => {
-            const previous = base?.data;
-            if (previous) setForm({ ...latest.data, ...Object.fromEntries(Object.entries(form).filter(([key, value]) =>
-              JSON.stringify(value) !== JSON.stringify(previous[key as keyof Payload]),
-            )) });
-            setBase(latest);
-            setConflict(false);
-          }}>保留我的编辑，以此版本为基础</button>
-        </div>}
-      </div>}
-      <div className="editor-meta">
-        <Field
-          label={
-            isRelationship
-              ? "恋爱开始日期"
-              : kind === "anniversary"
-                ? "纪念日日期"
-                : "记录日期"
-          }
-        >
-          <input
-            type="date"
-            value={form.date}
-            max={isRelationship ? service.day : undefined}
-            onChange={(e) => set({ date: e.target.value })}
-            required
-          />
-        </Field>
-        {kind === "memory" && (
-          <Field label="谁可以看见">
-            <select
-              value={visibility}
-              disabled={
-                photosBusy || !!existing || !!form.photos?.some((p) => p.fileId) || queuedPhotos.length > 0
-              }
-              onChange={(e) => setVisibility(e.target.value as Visibility)}
-            >
-              <option value="shared">我们两个人</option>
-              <option value="private" disabled={!service.hasPrivateAccess}>只有我自己</option>
-            </select>
-          </Field>
-        )}
-      </div>
-      {draftUnavailable && <p className="fineprint">旧草稿无法用当前设备密钥打开。</p>}
-      {isRelationship && (
-        <p className="muted">
-          恋爱开始当天记为第 1
-          天。保存后，首页天数和恋爱纪念日倒计时都会自动更新。
-        </p>
-      )}
-      {!isRelationship && (
-        <>
-          <Field label="这一页的小标题">
-            <input
-              placeholder={
-                kind === "capsule"
-                  ? "写给未来的我们…"
-                  : "今天，有什么值得记住？"
-              }
-              value={form.title}
-              maxLength={80}
-              onChange={(e) => set({ title: e.target.value })}
-              required
-            />
-          </Field>
-          <Field
-            label={kind === "capsule" ? "想留给未来的话" : "慢慢写，不用着急"}
-          >
-            <textarea
-              placeholder="或许只是一起喝了一杯咖啡，也很值得。"
-              rows={kind === "memory" || kind === "capsule" ? 6 : 3}
-              value={form.body || ""}
-              maxLength={12000}
-              onChange={(e) => set({ body: e.target.value })}
-            />
-          </Field>
-        </>
-      )}
-      {kind === "memory" && (
-        <>
-          <div className="editor-meta">
-            <Field label="今天的心情">
-              <select
-                value={form.mood || ""}
-                onChange={(e) => set({ mood: e.target.value })}
-              >
-                <option value="">留白也很好</option>
-                {moodOptions.map((m) => (
-                  <option key={m}>{m}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="小标签（用逗号分开）">
-              <input
-                value={tagInput}
-                placeholder="日常，约会，小幸福"
-                onChange={(event) => {
-                  const text = event.target.value;
-                  setTagInput(text);
-                  set({ tags: [...new Set(text.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean))].slice(0, 8) });
-                }}
-              />
-            </Field>
-          </div>
-          <div className="photo-upload">
+  const photoUpload = (
+    <div className="photo-upload">
             <label className="upload-button">
               <ImagePlus size={20} />
               <span>{photosBusy ? "正在整理并加密照片…" : "添加照片"}</span>
@@ -350,6 +213,175 @@ export function RecordEditor({
             </div>}
             {photoError && <p className="error-text">{photoError}</p>}
           </div>
+  );
+  return (
+    <form className={`record-form template-${photoPage ? "photo" : kind}`}
+      onSubmit={(e) => {
+        e.preventDefault();
+        if (busy || photosBusy || conflict || service.hasPendingSave || queuedPhotos.length > 0 || invalidTemplate) return;
+        run(
+          async () => {
+            if (form.kind === "capsule" && form.unlockDate! < service.day && form.unlockDate !== existing?.data.unlockDate)
+              throw new AppError("INVALID_DATE", "请选择今天或之后的开启日期");
+            clearTimeout(draftTimer.current);
+            await saving.current;
+            if (isMemory) {
+              await service.saveDraft({ form, visibility, base }, draftSlot);
+              setPersisted({ form, visibility, base });
+            }
+            try {
+              await service.save(completedForm(), visibility, base, undefined, true);
+            } catch (error) {
+              if (error instanceof AppError && error.code === "REVISION_CONFLICT") {
+                setLatest(null);
+                setConflict(true);
+              }
+              throw error;
+            }
+            if (isMemory) service.storage.remove(draftSlot);
+            done();
+          },
+          isRelationship
+            ? "恋爱开始日期已更新，首页天数已重新计算"
+            : "这份温柔，已经好好收藏",
+        );
+      }}
+    >
+      {service.hasPendingSave && <div className="notice" role="status">
+        上一次保存尚未确认。先核对该次保存，再提交新的内容。
+        <button type="button" className="text-button" disabled={busy} onClick={() => run(async () => {
+          const confirmed = await service.resumePendingSave();
+          if (confirmed && isMemory && (existing?.id === confirmed.id || !existing && confirmed.expectedRevision === 0)) {
+            const remote = service.entries.find((entry) => entry.id === confirmed.id);
+            if (remote && JSON.stringify(remote.data) === JSON.stringify(completedForm())) service.storage.remove(draftSlot);
+          }
+          done();
+        }, "已核对上一次保存")}>核对并继续原保存</button>
+      </div>}
+      {conflict && <div className="notice" role="status">
+        另一台设备已更新这条记录，你的编辑仍保留。
+        <button type="button" className="text-button" disabled={busy} onClick={() => run(async () => {
+          await service.refresh();
+          const current = service.active.find((entry) => entry.id === existing?.id);
+          if (!current) throw new AppError("RECORD_UNAVAILABLE", "这条记录已移出时间线，请先核对回收站");
+          setLatest(current);
+        })}>查看最新版本</button>
+        {latest && <div>
+          <strong>{latest.data.title}</strong><p>{latest.data.body}</p>
+          <button type="button" className="text-button" onClick={() => {
+            const previous = base?.data;
+            if (previous) {
+              const rebased = rebaseJournalEdit(previous, form, latest.data);
+              if (JSON.stringify(rebased.tags) !== JSON.stringify(form.tags)) setTagInput(rebased.tags?.join("，") ?? "");
+              setForm(rebased);
+            }
+            setBase(latest);
+            setConflict(false);
+          }}>保留我的编辑，以此版本为基础</button>
+        </div>}
+      </div>}
+      {photoPage && <div className="photo-workbench">{photoUpload}</div>}
+      {photoCount > 6 && <p className="notice" role="status">两台设备合起来有 {photoCount} 张照片。请选择最多 6 张再保存。</p>}
+      {receipt && <MealSlip receipt={receipt} date={form.date} names={service.displayNames} userId={service.userId}/>}
+      {!isRelationship && !isMemory && <RecordPaper data={form} reveal/>}
+      <div className="editor-meta">
+        <Field
+          label={
+            isRelationship
+              ? "恋爱开始日期"
+              : kind === "anniversary"
+                ? "纪念日日期"
+                : "记录日期"
+          }
+        >
+          <input
+            type="date"
+            value={form.date}
+            max={isRelationship ? service.day : undefined}
+            onChange={(e) => set({ date: e.target.value })}
+            required
+          />
+        </Field>
+        {kind === "memory" && (
+          <Field label="谁可以看见">
+            <select
+              value={visibility}
+              disabled={
+                photosBusy || !!existing || !!form.photos?.some((p) => p.fileId) || queuedPhotos.length > 0
+              }
+              onChange={(e) => setVisibility(e.target.value as Visibility)}
+            >
+              <option value="shared">我们两个人</option>
+              <option value="private" disabled={!service.hasPrivateAccess}>只有我自己</option>
+            </select>
+          </Field>
+        )}
+      </div>
+      {draftUnavailable && <p className="fineprint">旧草稿无法用当前设备密钥打开。</p>}
+      {isRelationship && (
+        <p className="muted">
+          恋爱开始当天记为第 1
+          天。保存后，首页天数和恋爱纪念日倒计时都会自动更新。
+        </p>
+      )}
+      {!isRelationship && (
+        <>
+          {receipt ? <div className="editor-meta">
+            <Field label="菜品或餐厅"><input required maxLength={mealNameLimit} value={receipt.dish} onChange={e => editReceipt(receipt.meal, e.target.value)}/></Field>
+            <Field label="餐次"><select value={receipt.meal} onChange={e => editReceipt(e.target.value, receipt.dish)}>{meals.map(name => <option key={name}>{name}</option>)}</select></Field>
+          </div> : <Field label={photoPage ? "这一页的小标题（选填）" : kind === "capsule" ? "信封上的题字" : kind === "date" ? "想约对方做什么" : kind === "wish" ? "想一起做的事" : "这一页的小标题"}>
+            <input
+              placeholder={
+                photoPage ? "给这张照片起个名字" : kind === "capsule"
+                  ? "写给未来的我们…"
+                  : "今天，有什么值得记住？"
+              }
+              value={form.title}
+              maxLength={80}
+              onChange={(e) => set({ title: e.target.value })}
+              required={!photoPage}
+            />
+          </Field>}
+          <Field
+            label={receipt ? "餐后随记" : kind === "capsule" ? "想留给未来的话" : kind === "place" ? "明信片背面" : kind === "date" ? "给对方的邀请" : photoPage ? "相纸背面 · 慢慢写，不用着急" : "慢慢写，不用着急"}
+          >
+            <textarea
+              placeholder={photoPage ? "给这张照片捎一句话，也可以留白" : kind === "capsule" ? "等你拆开这封信的时候……" : kind === "place" ? "在这里，最想记住什么？" : kind === "date" ? "几点碰头？有没有什么想带上？" : "想留住的那一刻……"}
+              rows={kind === "memory" || kind === "capsule" ? 6 : 3}
+              value={form.body || ""}
+              maxLength={12000}
+              onChange={(e) => set({ body: e.target.value })}
+            />
+          </Field>
+        </>
+      )}
+      {kind === "memory" && (
+        <>
+          {!photoPage && !receipt && <div className="editor-meta">
+            <Field label="今天的心情">
+              <select
+                value={form.mood || ""}
+                onChange={(e) => set({ mood: e.target.value })}
+              >
+                <option value="">留白也很好</option>
+                {moodOptions.map((m) => (
+                  <option key={m}>{m}</option>
+                ))}
+              </select>
+            </Field>
+            <Field label="小标签（用逗号分开）">
+              <input
+                value={tagInput}
+                placeholder="日常，约会，小幸福"
+                onChange={(event) => {
+                  const text = event.target.value;
+                  setTagInput(text);
+                  set({ tags: [...new Set(text.split(/[,，]/).map((tag) => tag.trim()).filter(Boolean))].slice(0, 8) });
+                }}
+              />
+            </Field>
+          </div>}
+          {!photoPage && photoUpload}
         </>
       )}
       {kind === "capsule" && (
@@ -482,12 +514,12 @@ export function RecordEditor({
         </span>
         {isMemory && service.supportsOutbox && (
           <button type="button" className="secondary"
-            disabled={busy || photosBusy || conflict || service.hasPendingSave || failedPhotos.length > 0}
+            disabled={busy || photosBusy || conflict || service.hasPendingSave || failedPhotos.length > 0 || invalidTemplate}
             onClick={() => void run(async () => {
               clearTimeout(draftTimer.current);
               await saving.current;
               const photos = [...(form.photos ?? []), ...queuedPhotos.map(({ photo }) => photo)];
-              await service.queueSave({ ...form, photos }, visibility, base,
+              await service.queueSave({ ...completedForm(), photos }, visibility, base,
                 queuedPhotos.map(({ photo, envelope }) => ({ fileId: photo.fileId, envelope })));
               try { service.storage.remove(draftSlot); } catch { /* The queued copy is already durable. */ }
               done();
@@ -495,7 +527,7 @@ export function RecordEditor({
             先存本机，稍后同步
           </button>
         )}
-        <button className="primary" disabled={busy || photosBusy || conflict || service.hasPendingSave || queuedPhotos.length > 0}>
+        <button className="primary" disabled={busy || photosBusy || conflict || service.hasPendingSave || queuedPhotos.length > 0 || invalidTemplate}>
           {busy
             ? "正在收藏…"
             : isRelationship

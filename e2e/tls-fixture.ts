@@ -36,11 +36,13 @@ export async function startHttpsFixture(directory: string, upstreamPort: number)
   const certificatePin = createHash("sha256").update(publicKey).digest("base64");
   let workerUpdate = false;
   let reachable = true;
+  let unavailable = false;
   const server = createServer(credentials, (incoming, outgoing) => {
     // Dropping the socket makes every request fail for real, including requests the
     // service worker makes on behalf of an offline page. Engine network emulation is
     // not applied to service worker sessions, so this is the only reliable offline path.
     if (!reachable) { incoming.destroy(); return; }
+    if (unavailable) { outgoing.writeHead(503).end("Temporary fixture error"); return; }
     const upstream = request({ hostname: "127.0.0.1", port: upstreamPort, path: incoming.url,
       method: incoming.method, headers: incoming.headers }, (response) => {
       if (workerUpdate && incoming.url === "/sw.js" && response.statusCode === 200) {
@@ -70,6 +72,7 @@ export async function startHttpsFixture(directory: string, upstreamPort: number)
     certificate: credentials.cert,
     publishWorkerUpdate: () => { workerUpdate = true; },
     setNetworkAvailable: (value: boolean) => { reachable = value; },
+    setUpstreamUnavailable: (value: boolean) => { unavailable = value; },
     close: () => new Promise<void>((done) => server.close(() => done())),
   };
 }

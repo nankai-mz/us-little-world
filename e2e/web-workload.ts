@@ -89,7 +89,7 @@ export async function exerciseWebWorkload({ a, b, origin, database, password, pn
   await b.goto(`${origin}/app/home`);
   await expect(b.getByRole("button", { name: /写一篇日记/ })).toBeVisible();
   const homeMs = Math.round(performance.now() - started);
-  await b.getByRole("button", { name: "时光", exact: true }).first().click();
+  await b.getByRole("navigation", { name: "移动端主导航" }).getByRole("button", { name: "收藏册", exact: true }).click();
   const timeline = b.getByRole("region", { name: "回忆时间轴" });
   await b.getByRole("textbox", { name: "搜索回忆" }).fill("合成历史");
   await expect(timeline.getByRole("status")).toHaveText("第 1–30 项，共 1000 项");

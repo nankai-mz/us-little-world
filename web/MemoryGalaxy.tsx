@@ -32,6 +32,7 @@ export function MemoryGalaxy({ entries, allEntries, service, state, setState, sc
   const panel = useRef<HTMLElement>(null);
   const map = useRef<HTMLDivElement>(null);
   const drag = useRef<{ pointer: number; x: number; y: number; scrollX: number; scrollY: number; moved: boolean }>(null);
+  const suppressClick = useRef(false);
   const lastTrigger = useRef<HTMLElement>(null);
   const focusPanel = useRef(false);
   useEffect(() => {
@@ -95,7 +96,9 @@ export function MemoryGalaxy({ entries, allEntries, service, state, setState, sc
               scrollPosition.top = event.currentTarget.scrollTop;
             }}
             onPointerDown={(event) => {
+              if (!event.isPrimary) return;
               drag.current = null;
+              suppressClick.current = false;
               if (event.pointerType !== "mouse" || event.button !== 0 || state.zoom <= 1) return;
               drag.current = { pointer: event.pointerId, x: event.clientX, y: event.clientY,
                 scrollX: event.currentTarget.scrollLeft, scrollY: event.currentTarget.scrollTop, moved: false };
@@ -110,24 +113,24 @@ export function MemoryGalaxy({ entries, allEntries, service, state, setState, sc
               pan.moved = true;
               event.currentTarget.scrollTo(pan.scrollX - x, pan.scrollY - y);
             }}
-            onPointerUp={() => {
-              if (drag.current?.moved) {
-                // The synthesized click follows pointerup. Suppress it before resetting the drag.
-                setTimeout(() => { drag.current = null; }, 0);
-              } else drag.current = null;
+            onPointerUp={(event) => {
+              if (drag.current?.pointer !== event.pointerId) return;
+              suppressClick.current = drag.current.moved;
+              drag.current = null;
             }}
             onPointerCancel={() => { drag.current = null; }}
+            onLostPointerCapture={() => { drag.current = null; }}
             onClickCapture={(event) => {
-              if (event.detail > 0 && drag.current?.moved) {
+              if (event.detail > 0 && suppressClick.current) {
                 event.preventDefault();
                 event.stopPropagation();
-                drag.current = null;
+                suppressClick.current = false;
               }
             }}>
             <div className="galaxy-map" style={{ width: `${state.zoom * 100}%`, height: `${state.zoom * 100}%` }}>
               {visible.map((star) => (
                 <button key={star.id} type="button" className={`galaxy-star galaxy-color-${star.color}`}
-                  style={{ left: `${star.x}%`, top: `${star.y}%` }} aria-label={`打开 ${star.photo.name || star.memory.data.title}`}
+                  style={{ left: `${star.x}%`, top: `${star.y}%` }} aria-label={`打开 ${star.memory.data.title} · ${star.memory.data.date} · ${star.photo.name || "照片"}`}
                   title={`${star.memory.data.date} · ${star.memory.data.title}`}
                   aria-pressed={selected?.id === star.id} onClick={(event) => select(star, event.currentTarget)} />
               ))}

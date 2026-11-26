@@ -5,8 +5,9 @@ import type { UsService } from "./service";
 export const wardrobeSlots = ["上装", "下装", "外套", "鞋履", "配饰"] as const;
 export const wardrobeNameLimit = 32;
 export const wardrobeWeatherLimit = 40;
+export const wardrobePreviewLimit = 6;
 export type WardrobeSlot = typeof wardrobeSlots[number];
-type PublicItem = { id: string; name: string; slot: WardrobeSlot };
+type PublicItem = { id: string; name: string; slot: WardrobeSlot; photoId?: string };
 export type WardrobeSelection = {
   edition: number;
   items: PublicItem[];
@@ -70,28 +71,67 @@ export async function addWardrobeItem(
   }
 }
 
-export async function publishWardrobe(service: UsService, privateIds: string[], weather: string, previousEdition: number) {
+export async function publishWardrobe(
+  service: UsService, privateIds: string[], weather: string, previousEdition: number, previewIds: string[] = [],
+) {
   const { space, me } = await latest(service, true);
   if (!service.hasPrivateAccess) throw new AppError("PRIVATE_KEY_REQUIRED", "请先恢复本机私人记录密钥");
+  if (space.status !== "active") throw new AppError("SPACE_CLOSING", "空间处于只读期，暂时无法更新共享衣物");
   const existing = wardrobeSelection(service, me);
   const current = existing?.data.wardrobeSelection;
   if ((current?.edition ?? 0) !== previousEdition) throw new AppError("WARDROBE_CHANGED", "共享衣物已更新，请重新选择");
-  if (!existing && !privateIds.length) return;
   if (privateIds.length > 8 || new Set(privateIds).size !== privateIds.length || [...weather.trim()].length > wardrobeWeatherLimit)
     throw new AppError("WARDROBE_LIMIT", "最多共享 8 件衣物，天气备注限 40 字");
+  if (previewIds.length > wardrobePreviewLimit || new Set(previewIds).size !== previewIds.length ||
+    previewIds.some((id) => !privateIds.includes(id)))
+    throw new AppError("WARDROBE_LIMIT", "最多为 6 件已选衣物共享照片");
+  if (previewIds.length && !service.supportsManagedPhotos)
+    throw new AppError("WARDROBE_PREVIEW_UNAVAILABLE", "当前服务暂不支持共享衣物照片");
+  if (!existing && !privateIds.length) return;
   const selectionId = resourceId("selection", space.id, me);
   const wardrobe = privateWardrobe(service);
-  const items = privateIds.map((id): PublicItem => {
+  const sources = privateIds.map((id) => {
     const item = wardrobe.find((entry) => entry.id === id);
     const slot = item?.data.category;
     if (!item || !isSlot(slot)) throw new AppError("WARDROBE_ITEM", "所选衣物已经移除，请重新选择");
-    return { id: visibleItemId(selectionId, item.id), name: item.data.title, slot };
+    const photo = previewIds.includes(id) ? item.data.photos?.[0] : undefined;
+    if (previewIds.includes(id) && !photo?.fileId)
+      throw new AppError("WARDROBE_ITEM", "有衣物照片已不可用，请重新选择");
+    return { id: visibleItemId(selectionId, item.id), name: item.data.title, slot, photo };
   });
-  const selection = { edition: previousEdition + 1, items, ...(items.length && weather.trim() ? { weather: weather.trim() } : {}) };
-  await service.save(
-    { kind: "wardrobe-share", title: "衣橱共享", date: service.day, wardrobeSelection: selection },
-    "shared", existing, selectionId,
-  );
+  const session = service.secrets;
+  const active = () => !!session && session === service.secrets && space.id === service.space?.id;
+  const items: PublicItem[] = [];
+  const photos: Attachment[] = [];
+  const uploads: Attachment[] = [];
+  try {
+    for (const { id, name, slot, photo } of sources) {
+      const item: PublicItem = { id, name, slot };
+      if (photo) {
+        const previousPhotoId = current?.items.find((previous) => previous.id === id)?.photoId;
+        let preview = existing?.data.photos?.find((attachment) => attachment.id === previousPhotoId);
+        if (!preview) {
+          const bytes = await service.readPhotoBytes(photo, "private", active);
+          if (!active()) throw new AppError("LOCKED", "请先解锁");
+          preview = await service.addPhoto(bytes, photo.mime, `${name}的共享预览`, "shared");
+          uploads.push(preview);
+        }
+        item.photoId = preview.id;
+        photos.push(preview);
+      }
+      items.push(item);
+    }
+    if (!active()) throw new AppError("LOCKED", "请先解锁");
+    const selection = { edition: previousEdition + 1, items, ...(items.length && weather.trim() ? { weather: weather.trim() } : {}) };
+    await service.save(
+      { kind: "wardrobe-share", title: "衣橱共享", date: service.day, wardrobeSelection: selection, ...(photos.length ? { photos } : {}) },
+      "shared", existing, selectionId,
+    );
+  } catch (error) {
+    if (active() && error instanceof AppError && !["TIMEOUT", "NETWORK_ERROR", "INVALID_RESPONSE", "WRITE_UNCONFIRMED"].includes(error.code))
+      await Promise.all(uploads.map(({ fileId }) => service.call("fileDelete", { fileId }).catch(() => {})));
+    throw error;
+  }
 }
 
 export async function suggestWardrobe(service: UsService, owner: string, selected: string[], edition: number, revision: number) {

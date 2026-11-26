@@ -1,9 +1,10 @@
+import { WelcomeCover } from "./JournalCover";
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import { App } from "./App";
 import { createHostedService } from "./platform";
 import { forgetUnlock } from "./rememberedUnlock";
 import { setOfflineAccount } from "./cipherCache";
-import { WebInstall } from "./WebInstall";
+import { WebInstall, WebInstallControls } from "./WebInstall";
 import { PasswordInput } from "./PasswordInput";
 
 interface WebsiteSession {
@@ -30,7 +31,6 @@ async function sessionRequest(path: string, data?: object) {
 }
 
 export function HostedWeb() {
-  const [installTarget, setInstallTarget] = useState<HTMLDivElement | null>(null);
   const [session, setSession] = useState<WebsiteSession | null>(null);
   const [name, setName] = useState("");
   const [password, setPassword] = useState("");
@@ -133,24 +133,13 @@ export function HostedWeb() {
     </main>
   );
   if (account && service) return (
-    <><WebInstall target={installTarget} /><App key={account} hosted={{
-      account,
-      service,
-      owner: !!session?.owner,
-      signOut,
-      installation: <div ref={setInstallTarget} />,
-    }} />
-    </>
+    <WebInstall>
+      <App key={account} hosted={{ account, service, owner: !!session?.owner, signOut, installation: <WebInstallControls /> }} />
+    </WebInstall>
   );
   return (
     <main className="welcome">
-      <div className="welcome-art">
-        <div className="brand"><span className="brand-mark">us ✳</span> 我们的小世界</div>
-        <div className="welcome-copy">
-          <h1>我们的小世界</h1><p>留给两个人的私密手账。</p>
-          <img src="/assets/pet-room.svg" alt="" />
-        </div>
-      </div>
+      <WelcomeCover />
       <div className="welcome-form">
         <h2>登录双人空间</h2>
         <form onSubmit={signIn}>

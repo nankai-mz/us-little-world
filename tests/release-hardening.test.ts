@@ -182,6 +182,34 @@ describe("网络重试与超时", () => {
       vi.useRealTimers();
     }
   });
+  it("读请求重试前取消前一次请求，写请求超时取消且保留结果未知状态", async () => {
+    vi.useFakeTimers();
+    try {
+      const signals: AbortSignal[] = [];
+      const invoke = vi.fn((_action: string, _data: object, signal?: AbortSignal) => {
+        signals.push(signal!);
+        return new Promise((_, reject) => {
+          signal!.addEventListener("abort", () => reject(signal!.reason), { once: true });
+        });
+      });
+      const transport = createTransport(invoke, { timeoutMs: 10 });
+      const read = expect(transport.call("getSpace")).rejects.toMatchObject({ code: "TIMEOUT" });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(signals.map(({ aborted }) => aborted)).toEqual([true, false]);
+      await vi.advanceTimersByTimeAsync(10);
+      await read;
+
+      const write = expect(transport.call("putRecord")).rejects.toMatchObject({
+        code: "TIMEOUT", message: expect.stringContaining("操作结果尚未确认"),
+      });
+      await vi.advanceTimersByTimeAsync(100);
+      await write;
+      expect(signals.map(({ aborted }) => aborted)).toEqual([true, true, true]);
+      expect(invoke.mock.calls.map(([action]) => action)).toEqual(["getSpace", "getSpace", "putRecord"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
   it("接口协议不匹配时明确报错", async () => {
     const service = local();
     service.transport = {

@@ -4,6 +4,7 @@ import { AppError, type Entry } from "./types";
 import type { UsService } from "./service";
 
 export const meals = ["早餐", "午餐", "晚餐"] as const;
+export const mealNameLimit = 40;
 export type Meal = typeof meals[number];
 export const preferences = { want: "想吃", okay: "可以", no: "不想吃" } as const;
 export type MealPreference = keyof typeof preferences;
@@ -90,7 +91,7 @@ export function applyMealAction(plan: MealPlan, userId: string, members: string[
       const name = action.name.trim();
       const candidateTags = tags(action.tags);
       validAmount(action.price);
-      if (!name || [...name].length > 40 || candidateTags.length > 10 || candidateTags.some((tag) => [...tag].length > 20))
+      if (!name || [...name].length > mealNameLimit || candidateTags.length > 10 || candidateTags.some((tag) => [...tag].length > 20))
         throw new AppError("MEAL_CANDIDATE", "填写 1 至 40 字的候选，最多 10 个标签，每个最多 20 字");
       const id = hashText(normalize(name));
       if (plan.candidates.some((item) => item.id === id)) return plan;
@@ -183,6 +184,7 @@ export async function archiveMealPlan(service: UsService, date: string, meal: Me
   try {
     await service.save({
       kind: "memory", title: `${meal}吃${choice.name}`, date, tags: ["今天吃什么"],
+      mealReceipt: { meal, dish: choice.name },
       ...(choice.price !== undefined ? { body: `预计预算 ${choice.price} 元` } : {}),
     }, "shared", undefined, id);
   } catch (error) {

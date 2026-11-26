@@ -803,6 +803,7 @@ export class UsService {
     return recordOutboxScope(session);
   }
   get supportsOutbox() { return !!this.features.outbox; }
+  get supportsManagedPhotos() { return !!this.features.managedPhotos; }
   async prepareQueuedPhoto(bytes: string | Uint8Array, mime: string, name: string, visibility: Visibility) {
     const session = this.secrets;
     const space = this.space;
@@ -837,7 +838,7 @@ export class UsService {
       };
     });
   }
-  async copyOutboxAsNew(operationId: string) {
+  async copyOutboxAsNew(operationId: string, edits?: { title: string; body: string; photoIds: string[] }) {
     const session = this.secrets;
     const item = (await this.listOutbox()).find((candidate) => candidate.operationId === operationId);
     if (!session || this.secrets !== session) throw new AppError("LOCKED", "请先解锁");
@@ -846,16 +847,25 @@ export class UsService {
     const { data, visibility } = item;
     const copied = [];
     for (const photo of data.photos ?? []) {
+      if (edits && !edits.photoIds.includes(photo.id)) continue;
       const pending = item.attachments?.find(({ fileId }) => fileId === photo.fileId);
-      const bytes = pending
-        ? decryptPhotoBytes(pending.envelope, session, photo.id, visibility)
-        : await this.readPhotoBytes(photo, visibility, () => this.secrets === session);
+      let bytes: Uint8Array;
+      try {
+        bytes = pending
+          ? decryptPhotoBytes(pending.envelope, session, photo.id, visibility)
+          : await this.readPhotoBytes(photo, visibility, () => this.secrets === session);
+      } catch (error) {
+        if (error instanceof AppError && ["FORBIDDEN", "DECRYPT_FAILED", "KEY_NOT_FOUND"].includes(error.code))
+          throw new AppError("OUTBOX_PHOTO_UNAVAILABLE", `无法找回「${photo.name}」。可以取消勾选这张照片后再另存。`);
+        throw error;
+      }
       if (this.secrets !== session) throw new AppError("LOCKED", "会话已改变，请重新解锁");
       copied.push(await this.prepareQueuedPhoto(bytes, photo.mime, photo.name, visibility));
     }
     if (this.secrets !== session) throw new AppError("LOCKED", "会话已改变，请重新解锁");
     const { history: _history, favoriteBy: _favorites, ...draft } = data;
-    await this.queueSave({ ...draft, photos: copied.map(({ photo }) => photo) }, visibility, undefined,
+    const content = edits ? { title: edits.title, body: edits.body } : {};
+    await this.queueSave({ ...draft, ...content, photos: copied.map(({ photo }) => photo) }, visibility, undefined,
       copied.map(({ photo, envelope }) => ({ fileId: photo.fileId, envelope })));
   }
   async discardOutbox(operationId: string) {

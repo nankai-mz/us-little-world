@@ -2,6 +2,17 @@ import { CalendarDays, Check, Coffee, Flower2, Heart, MapPin, MoreHorizontal, Pl
 import { dateLabel, daysBetween, nextAnniversary } from "../src/core/date";
 import type { UsService } from "../src/core/service";
 import type { Entry } from "../src/core/types";
+import { RecordPaper } from "./PaperObjects";
+
+function AnniversaryCount({ entry, day }: { entry: Entry; day: string }) {
+  const date = nextAnniversary(entry.data.date, entry.data.yearly, day);
+  const count = daysBetween(day, date);
+  return <div className="plan-count">
+    {count < 0 && <span>已过去</span>}
+    {count !== 0 && <strong>{Math.abs(count)}</strong>}
+    <span>{count < 0 ? "天" : count === 0 ? "就在今天" : "天后"} · {dateLabel(date)}</span>
+  </div>;
+}
 
 export function PlansPage({ section, setSection, entries, day, service, edit, run }: {
   section: string;
@@ -47,14 +58,8 @@ export function PlansPage({ section, setSection, entries, day, service, edit, ru
             <Plus size={16} /> 添加一份期待
           </button>
         </div>
-        <div className="feature-banner plan-banner">
-          <Flower2 size={54} />
-          <div>
-            <span className="eyebrow">ONE LITTLE WISH AT A TIME</span>
-            <h2>慢慢来，我们还有好多以后</h2>
-            <p>不必急着全部实现，一起期待的过程也很美好。</p>
-          </div>
-        </div>
+        {!entries.some(entry => entry.data.kind === (section === "anniversaries" ? "anniversary" : section === "dates" ? "date" : "wish")) &&
+          <div className="plans-empty"><p>{section === "dates" ? "第一张约会票，想约对方去哪里？" : section === "wishes" ? "把那件“有机会一起去”的事写下来。" : "为你们的日历圈出一个特别的日子。"}</p></div>}
         <div className="cards-grid">
           {entries
             .filter(
@@ -94,11 +99,11 @@ export function PlansPage({ section, setSection, entries, day, service, edit, ru
                     <MoreHorizontal size={18} />
                   </button>
                 </div>
-                <h3>
+                {section === "dates" ? <RecordPaper data={e.data}/> : <h3>
                   {e.data.category === "relationship"
                     ? "恋爱纪念日"
                     : e.data.title}
-                </h3>
+                </h3>}
                 <p>
                   {e.data.category === "relationship"
                     ? `恋爱开始日期：${dateLabel(e.data.date)} · 用于计算首页在一起天数`
@@ -108,18 +113,7 @@ export function PlansPage({ section, setSection, entries, day, service, edit, ru
                         : "一起期待，也一起慢慢实现")}
                 </p>
                 {section === "anniversaries" ? (
-                  <div className="plan-count">
-                    <strong>
-                      {Math.abs(daysBetween(day, nextAnniversary(e.data.date, e.data.yearly, day)))}
-                    </strong>
-                    <span>
-                      {nextAnniversary(e.data.date, e.data.yearly, day) < day ? "天前" :
-                        nextAnniversary(e.data.date, e.data.yearly, day) === day ? "天 · 就在今天" : "天后"} ·{" "}
-                      {dateLabel(
-                        nextAnniversary(e.data.date, e.data.yearly, day),
-                      )}
-                    </span>
-                  </div>
+                  <AnniversaryCount entry={e} day={day} />
                 ) : section === "dates" ? (
                   <div className="date-details">
                     <span>

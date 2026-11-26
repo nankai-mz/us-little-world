@@ -135,7 +135,7 @@ if (workerSource && manifest) {
     }
   }
   const illustrations = ["coffee", "favicon", "flower", "pet-room", "sea", "sunset"].map((name) => `/assets/${name}.svg`);
-  for (const path of [...illustrations, "/assets/icon-192.png", "/assets/icon-512.png", ...immutableAssets]) publicAssets.add(path);
+  for (const path of [...illustrations, "/assets/journal-flower.jpg", "/assets/journal-lake.jpg", "/assets/icon-192.png", "/assets/icon-512.png", ...immutableAssets]) publicAssets.add(path);
   const assets = [...publicAssets].sort();
   const digest = createHash("sha256").update(offlineShell).update(workerSource).update(manifest);
   for (const file of assets) digest.update(file).update(await readFile(resolve("dist", "." + file)));

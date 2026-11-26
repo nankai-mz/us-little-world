@@ -1,4 +1,4 @@
-import { firefox, webkit, test, expect, type Browser, type Page } from "@playwright/test";
+import { firefox, webkit, test, expect, type Browser, type Page, type Request } from "@playwright/test";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 import { signIn, startReleaseFixture } from "./release-fixture";
@@ -111,35 +111,52 @@ test("Firefox 与 WebKit 双人图文、冷启动离线与互换浏览器恢复"
   const { accounts, origin } = fixture;
   const browsers: Browser[] = [];
   const errors: string[] = [];
-  const engineNetworkNoise: { engine: string; phase: string; path: string; message: string }[] = [];
+  const engineNetworkNoise: { engine: string; phase: string; path: string; message: string; requestFailure: string }[] = [];
+  const checkPageErrors: (() => void)[] = [];
   const endpoint = "/api/space";
   const host = new URL(origin).host;
   const cancellationMessages = new Set([
     `Fetch API cannot load ${origin}${endpoint} due to access control checks.`,
     `/${host}${endpoint} due to access control checks.`,
   ]);
-  let networkAvailable = true;
-  const setNetworkAvailable = (available: boolean) => {
-    networkAvailable = available;
-    fixture.setNetworkAvailable(available);
-  };
   const firstPhrase = "first compatibility unlock phrase";
   const secondPhrase = "second compatibility unlock phrase";
   const newPage = async (browser: Browser, width: number) => {
     const context = await browser.newContext({ ignoreHTTPSErrors: true, viewport: { width, height: 820 } });
     const page = await context.newPage();
     const engine = browser.browserType().name();
-    let navigatingAt = -Infinity;
-    page.on("request", (request) => {
-      if (request.isNavigationRequest()) navigatingAt = Date.now();
-    });
-    page.on("pageerror", (error) => {
-      const offline = !networkAvailable;
-      const navigating = Date.now() - navigatingAt < 1500;
-      const message = error.message.replace(origin, "").replace(host, "测试源");
-      if (engine === "webkit" && (offline || navigating) && cancellationMessages.has(error.message))
-        engineNetworkNoise.push({ engine, phase: offline ? "断网" : "导航", path: endpoint, message });
-      else errors.push(`${engine}（${offline ? "断网" : navigating ? "导航" : "普通交互"}）：${message}`);
+    const pageErrors: { at: number; error: Error }[] = [];
+    page.on("pageerror", (error) => pageErrors.push({ at: Date.now(), error }));
+    const navigationStarts: number[] = [];
+    const pending = new Map<Request, number>();
+    const failures: { startedAt: number; failedAt: number; reason: string }[] = [];
+    if (engine === "webkit") {
+      page.on("request", (request) => {
+        if (request.frame() !== page.mainFrame()) return;
+        if (request.isNavigationRequest()) navigationStarts.push(Date.now());
+        if (request.method() === "POST" && request.resourceType() === "fetch" && request.url() === `${origin}${endpoint}`)
+          pending.set(request, Date.now());
+      });
+      page.on("requestfinished", (request) => pending.delete(request));
+      page.on("requestfailed", (request) => {
+        const startedAt = pending.get(request);
+        pending.delete(request);
+        if (startedAt !== undefined)
+          failures.push({ startedAt, failedAt: Date.now(), reason: request.failure()?.errorText ?? "" });
+      });
+    }
+    checkPageErrors.push(() => {
+      for (const { at, error } of pageErrors) {
+        const message = error.message.replace(origin, "").replace(host, "测试源");
+        // WebKit can surface the cancellation of an in-flight fetch during main-frame navigation as a page exception.
+        const index = cancellationMessages.has(error.message) ? failures.findIndex(({ startedAt, failedAt, reason }) =>
+          /cancel|abort|interrupt/i.test(reason) && Math.abs(at - failedAt) <= 500 &&
+          navigationStarts.some((start) => startedAt <= start && start <= at + 500 && Math.abs(start - failedAt) <= 500)) : -1;
+        if (index >= 0) {
+          const [{ reason }] = failures.splice(index, 1);
+          engineNetworkNoise.push({ engine, phase: "导航取消", path: endpoint, message, requestFailure: reason });
+        } else errors.push(`${engine}：${message}`);
+      }
     });
     return page;
   };
@@ -233,7 +250,7 @@ test("Firefox 与 WebKit 双人图文、冷启动离线与互换浏览器恢复"
     // sessions, so the fixture stops forwarding as well. WebKit reports an internal
     // navigation error when its network emulation is combined with a worker-cached page,
     // so the WebKit profile only loses the real upstream connection.
-    setNetworkAvailable(false);
+    fixture.setNetworkAvailable(false);
     if (!bIsWebKit) await b.context().setOffline(true);
     try {
       await b.reload({ waitUntil: "domcontentloaded" });
@@ -246,7 +263,7 @@ test("Firefox 与 WebKit 双人图文、冷启动离线与互换浏览器恢复"
         .evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(96);
       await expect(b.getByText("Firefox 私人日记", { exact: true })).toHaveCount(0);
     } finally {
-      setNetworkAvailable(true);
+      fixture.setNetworkAvailable(true);
       if (!bIsWebKit) await b.context().setOffline(false);
     }
 
@@ -399,6 +416,7 @@ test("Firefox 与 WebKit 双人图文、冷启动离线与互换浏览器恢复"
     await a.goto(`${origin}/app/memories`);
     await expect(a.getByRole("heading", { name: "仅共同设备的合成日记" })).toBeVisible();
 
+    checkPageErrors.forEach((check) => check());
     expect(errors).toEqual([]);
     const report = info.outputPath("browser-compat.json");
     await mkdir(dirname(report), { recursive: true });

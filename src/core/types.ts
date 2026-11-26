@@ -55,6 +55,9 @@ export interface Attachment {
 export interface Payload {
   kind: Kind;
   title: string;
+  photoPage?: true;
+  replyPhotoId?: string;
+  mealReceipt?: { meal: string; dish: string; stamps?: Record<string, "again" | "other"> };
   body?: string;
   date: string;
   mood?: string;

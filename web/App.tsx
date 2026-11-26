@@ -38,6 +38,7 @@ import {
   Search,
   Settings,
   ShieldCheck,
+  Shirt,
   Sparkles,
   Star,
   Sun,
@@ -50,6 +51,10 @@ import { UsService } from "../src/core/service";
 import { Field } from "./Field";
 import { RecordEditor, moodOptions } from "./RecordEditor";
 import { SharedMemoryPhoto } from "./SharedMemoryPhoto";
+import { CoverCredits, JournalCover, PhotoReplyButton, WelcomeCover } from "./JournalCover";
+import { MealSlip, RecordPaper } from "./PaperObjects";
+import { canReplyToPhoto, finishPhotoPair, receiptOf, stampMeal, stampNames, type MealStamp } from "../src/core/keepsakes";
+import { prepareBrowserPhoto } from "./photos";
 import { PasswordInput } from "./PasswordInput";
 import { HomeCompanionship } from "./HomeCompanionship";
 import type { GalaxyView } from "./MemoryGalaxy";
@@ -57,6 +62,7 @@ import { MemoryPages } from "./MemoryPages";
 import { newBookDraft } from "./bookDraft";
 import { ExternalMap } from "./ExternalMap";
 import { OutboxPanel } from "./OutboxPanel";
+import { useCalendarDay } from "./useCalendarDay";
 import { ArchiveExport, RestoreForm } from "./BackupForms";
 import { Modal } from "./Modal";
 import { pairingRoute, parseWebRoute, recordRoute, webRoute, type WebPage, type WebRoute } from "./routes";
@@ -99,16 +105,15 @@ import {
 const PlansPage = lazy(() => import("./PlansPage").then(({ PlansPage }) => ({ default: PlansPage })));
 const QuestionRoom = lazy(() => import("./QuestionRoom").then(({ QuestionRoom }) => ({ default: QuestionRoom })));
 const MealDecision = lazy(() => import("./MealDecision").then(({ MealDecision }) => ({ default: MealDecision })));
+const MealNotebook = lazy(() => import("./MealDecision").then(({ MealNotebook }) => ({ default: MealNotebook })));
 const Wardrobe = lazy(() => import("./Wardrobe").then(({ Wardrobe }) => ({ default: Wardrobe })));
 const MemoryGalaxy = lazy(() => import("./MemoryGalaxy").then(({ MemoryGalaxy }) => ({ default: MemoryGalaxy })));
 const MemoryBook = lazy(() => import("./MemoryBook").then(({ MemoryBook }) => ({ default: MemoryBook })));
 
 const tabs = [
-  { id: "home", label: "我们的小窝", sub: "首页", icon: Home },
-  { id: "memories", label: "时光手账", sub: "时光", icon: Feather },
-  { id: "interaction", label: "一起玩耍", sub: "互动", icon: Gamepad2 },
-  { id: "plans", label: "未来清单", sub: "计划", icon: CalendarDays },
-  { id: "profile", label: "我的空间", sub: "我的", icon: UserRound },
+  { id: "home", label: "今天", sub: "今天", icon: Home },
+  { id: "interaction", label: "一起做", sub: "一起做", icon: Gamepad2 },
+  { id: "memories", label: "收藏册", sub: "收藏册", icon: Feather },
 ] as const;
 const firstAvatar = { name: SPACE_MEMBER_NAMES[0], color: "a" };
 const secondAvatar = { name: SPACE_MEMBER_NAMES[1], color: "b" };
@@ -146,7 +151,9 @@ function currentWebRoute() {
   const next = parseWebRoute(window.location.pathname) ?? webRoute("home");
   const parent = window.history.state?.usRecordBackground;
   const background = next.record && typeof parent === "string" ? parseWebRoute(parent) : undefined;
-  return next.record && background && !background.record ? recordRoute(next.record, background) : next;
+  if (!next.record) return next;
+  const record = next.record.kind === "new" && window.history.state?.usPhotoPage ? { kind: "new" as const, photo: true } : next.record;
+  return recordRoute(record, background && !background.record ? background : webRoute("memories"));
 }
 export function App({ hosted }: { hosted?: { account: string; service: UsService; owner: boolean; signOut: () => Promise<void>; installation?: ReactNode } }) {
   const hostedService = hosted?.service;
@@ -166,6 +173,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
   const authorizationAttempt = useRef(0);
   const [activeEditing, setEditing] = useState<Entry | undefined>();
   const [editorTitle, setEditorTitle] = useState("");
+  const [localPhotoPage, setLocalPhotoPage] = useState(false);
   const [activeDetail, setDetail] = useState<Entry | null>(null);
   const editorDirty = useRef(false);
   const target = route.record;
@@ -180,7 +188,8 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
   );
   const modal = authorization ? "authorize" : activeModal || recordModal || settingsModal || "";
   const editing = activeModal ? activeEditing : routedEntry;
-  const detail = activeModal ? activeDetail : routedEntry ?? null;
+  const detail = activeModal ? service?.active.find(e => e.id === activeDetail?.id) ?? activeDetail : routedEntry ?? null;
+  const photoEditor = !!editing?.data.photoPage || (target?.kind === "new" && !activeModal ? !!target.photo : localPhotoPage && !editing);
   const [busy, setBusy] = useState(false);
   const [toast, setToast] = useState("");
   const [password, setPassword] = useState("");
@@ -594,19 +603,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
       setPassword("");
     });
   }
-  const currentDay = hosted ? spaceDay : today;
-  const [day, setDay] = useState(currentDay);
-  useEffect(() => {
-    const clock = hosted ? spaceDay : today;
-    const tick = () => setDay(clock());
-    tick();
-    const timer = window.setInterval(tick, 15000);
-    document.addEventListener("visibilitychange", tick);
-    return () => {
-      clearInterval(timer);
-      document.removeEventListener("visibilitychange", tick);
-    };
-  }, [!!hosted]);
+  const day = useCalendarDay(!!hosted);
   const entries = service?.active ?? emptyEntries;
   const spaceMembers = service?.space?.members;
   const memberAvatars = [firstAvatar, secondAvatar].map((avatar, index) => ({
@@ -618,6 +615,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
     (e) => e.data.kind === "anniversary" && e.data.category === "relationship",
   );
   const memories = useMemo(() => entries.filter((e) => e.data.kind === "memory"), [entries]);
+  const places = useMemo(() => entries.filter((e) => e.data.kind === "place"), [entries]);
   const sharedMemories = useMemo(() => memories.filter((e) => e.visibility === "shared"), [memories]);
   const filteredMemories = useMemo(() => memories.filter(
     (e) =>
@@ -732,8 +730,9 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
     close();
   }, [target, activeModal, closeRecordRoute, close]);
   function openRecordRoute(next: WebRoute) {
-    const state = { usRecordBackground: webRoute(page, section).pathname };
-    if (route.record) window.history.replaceState(window.history.state, "", next.pathname);
+    const state = { usRecordBackground: route.record ? window.history.state?.usRecordBackground : webRoute(page, section).pathname,
+      usPhotoPage: next.record?.kind === "new" && !!next.record.photo };
+    if (route.record) window.history.replaceState(state, "", next.pathname);
     else window.history.pushState(state, "", next.pathname);
     setModal("");
     setRoute(next);
@@ -768,15 +767,21 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
     setAiPreview(false);
     window.scrollTo(0, 0);
   }
-  function edit(kind: string, entry?: Entry, title = "") {
+  function edit(kind: string, entry?: Entry, title = "", photo = false) {
     if (readOnly) return notify("空间处于只读期");
     setEditorTitle(title);
+    setLocalPhotoPage(photo);
     if (hostedService && kind === "memory" && (!entry || /^[a-f0-9]{32,64}$/.test(entry.id))) {
-      openRecordRoute(recordRoute(entry ? { kind: "edit", id: entry.id } : { kind: "new" }, webRoute(page, section)));
+      openRecordRoute(recordRoute(entry ? { kind: "edit", id: entry.id } : { kind: "new", photo }, webRoute(page, section)));
       return;
     }
     setEditing(entry);
     setModal(`edit:${kind}`);
+  }
+  function openPhotoEditor() {
+    if (readOnly) return notify("空间处于只读期");
+    flushSync(() => edit("memory", undefined, "", true));
+    document.querySelector<HTMLInputElement>('.modal input[aria-label="添加照片"]')?.click();
   }
   const viewEntry = (e: Entry) => {
     if (hostedService && e.data.kind === "memory" && /^[a-f0-9]{32,64}$/.test(e.id)) {
@@ -835,34 +840,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
   if (welcomeMode === "resume" || !service?.secrets || !service.space)
     return (
       <div className="welcome">
-        <div className="welcome-art">
-          <div className="brand">
-            <span className="brand-mark">
-              u<span>s</span>
-              <i>✳</i>
-            </span>
-            <div>
-              我们的小世界<small>Two people. One little universe.</small>
-            </div>
-          </div>
-          <div className="welcome-copy">
-            <span className="eyebrow">A PRIVATE LITTLE PLACE FOR TWO</span>
-            <h1>
-              把日子过成
-              <br />
-              我们喜欢的样子<span>。</span>
-            </h1>
-            <p>
-              收藏平凡的瞬间，也期待未来的每一天。
-              <br />
-              一个只属于两个人的，温柔的小世界。
-            </p>
-            <img src="/assets/pet-room.svg" alt="糯米在阳光下的小屋" />
-          </div>
-          <p className="welcome-foot">
-            <LockKeyhole size={14} /> 私密记录 · 自愿互动 · 没有打卡压力
-          </p>
-        </div>
+        <WelcomeCover />
         <div className="welcome-form">
           <Flower2 className="flower" size={40} />
           <h2>
@@ -897,7 +875,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                 ? "你的空间处于关闭冷静期。请使用已有的加密备份恢复密钥。"
               : hosted
                 ? "请创建或加入你们的双人空间。"
-                : "微信版是我们的目的地，这里可以先体验。"}
+                : "这里可以翻阅示例，也可以建立自己的本机手账。"}
           </p>
           {welcomeMode === "unlock" && mode === "demo" ? (
             <div className="demo-session-ended">
@@ -951,9 +929,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                 建立本机加密空间
               </button>
               <p className="fineprint">
-                示例数据仅用于体验。本机空间不会同步至微信；
-                <br />
-                正式双人同步请使用项目中的微信小程序。
+                本机手账保存在这个浏览器。两人跨设备使用时，请登录双人网站。
               </p>
             </>
           ) : (
@@ -1061,14 +1037,6 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
             </form>
           )}
           {hosted && <button className="text-button full" disabled={busy} onClick={() => run(hosted.signOut)}>退出网站账号</button>}
-          <div className="welcome-note">
-            <Leaf size={20} />
-            <span>
-              不用每天来，也不用完成什么。
-              <br />
-              想记录的时候，我们就在这里。
-            </span>
-          </div>
         </div>
         {toast && (
           <div className="toast" role="status">
@@ -1165,9 +1133,9 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
     rows.length ? (
       <div className={compact ? "memory-grid" : "timeline-grid"}>
         {rows.map((e) => (
-          <article className="memory-card" key={e.id}>
+          <article className={`memory-card ${receiptOf(e.data) ? "receipt-memory" : e.data.photoPage ? "photo-memory" : ""}`} key={e.id}>
             <button className="memory-open" onClick={() => viewEntry(e)}>
-              {e.data.photos?.[0] ? (
+              {receiptOf(e.data) ? <MealSlip receipt={receiptOf(e.data)!} date={e.data.date} names={service.displayNames} userId={service.userId}/> : e.data.photos?.[0] ? (
                 <Photo
                   photo={e.data.photos[0]}
                   visibility={e.visibility}
@@ -1231,112 +1199,21 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
 
   return (
     <div className="app-shell" data-revision={revision}>
-      <aside className="sidebar">
-        <button className="brand" onClick={() => go("home")}>
-          <span className="brand-mark">
-            u<span>s</span>
-            <i>✳</i>
-          </span>
-          <div>
-            我们的小世界<small>OUR LITTLE WORLD</small>
-          </div>
-        </button>
-        <div className="side-space">
-          <div className="avatar-pair">
-            {memberAvatars.map(({ name, color }) =>
-              <span className={`avatar ${color}`} key={color}>{[...name][0]}</span>,
-            )}
-            <i>
-              <Heart size={10} fill="currentColor" />
-            </i>
-          </div>
-          <strong>
-            {hosted ? memberAvatars.map(({ name }) => name).join(" & ") : mode === "demo"
-              ? SPACE_MEMBER_NAMES.join(" & ")
-              : relationship?.data.body || "我 & 你"}
-          </strong>
-          <span className="tiny">
-            {hosted ? "我们的双人空间" : mode === "demo" ? "我们的示例空间" : "我们的本机空间"}
-          </span>
-        </div>
-        <span className="nav-label">我们的每一天</span>
-        <nav aria-label="桌面主导航">
-          {tabs.map((t) => (
-            <button
-              className={`nav-item ${page === t.id ? "active" : ""}`}
-              aria-current={page === t.id ? "page" : undefined}
-              key={t.id}
-              onClick={() =>
-                go(
-                  t.id,
-                  t.id === "memories"
-                    ? "timeline"
-                    : t.id === "interaction"
-                      ? "games"
-                      : t.id === "plans"
-                        ? "wishes"
-                        : undefined,
-                )
-              }
-            >
-              <t.icon size={20} />
-              <span>{t.label}</span>
-              {page === t.id && <i />}
-            </button>
-          ))}
+      <a className="journal-skip" href="#journal-main">跳到主要内容</a>
+      <header className="journal-mast">
+        <button className="journal-brand" onClick={() => go("home")} aria-label="我们的小世界首页"><b>Us<span>.</span></b><span>我们的小世界</span></button>
+        <nav className="journal-nav" aria-label="桌面主导航">
+          {tabs.map(t => <button key={t.id} aria-current={(page === t.id || (page === "plans" && t.id === "interaction")) ? "page" : undefined}
+            onClick={() => go(t.id)}>{t.label}</button>)}
         </nav>
-        <div className="side-bottom">
-          <div className="side-quote">
-            <Flower2 size={28} />
-            <p>
-              有你在的日常，
-              <br />
-              每一页都值得珍藏。
-            </p>
-            <span>little things, big love.</span>
-          </div>
-          <button
-            className="side-security"
-            onClick={() => openSettingsPane("devices")}
-          >
-            <ShieldCheck size={16} />
-            <span>隐私与安全</span>
-            <ChevronRight size={14} />
-          </button>
-          <div className="local-mode">
-            <span /> {hosted ? "双人同步" : `本机${mode === "demo" ? "示例" : "加密"}模式`}
-          </div>
+        <div className="top-actions">
+          <button className="icon-button" aria-label="隐私与安全" onClick={() => openSettingsPane("devices")}><ShieldCheck size={17}/></button>
+          <button className="icon-button" aria-label="切换深浅主题" onClick={() => setDark(v => !v)}>{dark ? <Sun size={18}/> : <Moon size={18}/>}</button>
+          <button className="icon-button" aria-label="刷新" onClick={() => run(() => service.refresh(), "已经是最新的时光了")}><RefreshCw size={17} className={busy ? "spin" : ""}/></button>
+          <button className={`avatar small ${myAvatar.color}`} aria-label="打开我的空间" aria-current={page === "profile" ? "page" : undefined} onClick={() => go("profile")}>{[...myAvatar.name][0]}</button>
         </div>
-      </aside>
-      <main>
-        <header className="topbar">
-          <div className="breadcrumb">
-            我们的小世界 <ChevronRight size={12} />{" "}
-            <strong>{tabs.find((t) => t.id === page)?.sub || "时光"}</strong>
-          </div>
-          <div className="top-actions">
-            <span className="private-label">
-              <LockKeyhole size={13} /> 只属于我们
-            </span>
-            <button
-              className="icon-button"
-              onClick={() => setDark((v) => !v)}
-              aria-label="切换深浅主题"
-            >
-              {dark ? <Sun size={18} /> : <Moon size={18} />}
-            </button>
-            <button
-              className="icon-button"
-              onClick={() => run(() => service.refresh(), "已经是最新的时光了")}
-              aria-label="刷新"
-            >
-              <RefreshCw size={17} className={busy ? "spin" : ""} />
-            </button>
-            <button className={`avatar small ${myAvatar.color}`} aria-label="打开我的空间" onClick={() => go("profile")}>
-              {[...myAvatar.name][0]}
-            </button>
-          </div>
-        </header>
+      </header>
+      <main id="journal-main">
         <div className="content">
           {(service.space?.status === "closing" ||
             !!service.space?.closeConfirmations?.length) && (
@@ -1396,52 +1273,14 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
               )}
             </section>
           )}
-          <div className="page-heading">
-            <div>
-              <span className="eyebrow">
-                {page === "home"
-                  ? "LIFE IS BETTER WITH YOU"
-                  : page === "memories"
-                    ? "LITTLE MOMENTS, FOREVER MEMORIES"
-                    : page === "interaction"
-                      ? "A LITTLE JOY FOR TWO"
-                      : page === "plans"
-                        ? "GOOD THINGS ARE ON THEIR WAY"
-                        : "YOUR OWN LITTLE CORNER"}
-              </span>
-              <h1>
-                {page === "home"
-                  ? "把今天，写进我们的故事"
-                  : page === "memories"
-                    ? "时光慢慢，回忆满满"
-                    : page === "interaction"
-                      ? "和你一起，浪费一点时间"
-                      : page === "plans"
-                        ? "未来，有好多想和你做的事"
-                        : "给自己，留一处温柔角落"}
-                <span className="heading-flower">✳</span>
-              </h1>
-              <p>
-                {page === "home"
-                  ? "平凡日子里的小小幸福，都值得被好好收藏。"
-                  : page === "memories"
-                    ? "那些一起走过的日子，都在这里闪着光。"
-                    : page === "interaction"
-                      ? "没有任务，没有打卡。今天想玩什么，就玩什么。"
-                      : page === "plans"
-                        ? "把小小的期待，慢慢变成共同的回忆。"
-                        : "照顾好自己的心情，也照顾好我们的回忆。"}
-              </p>
-            </div>
-            <span className="date-pill">
-              <CalendarDays size={15} />
-              {new Date().toLocaleDateString("zh-CN", {
-                month: "long",
-                day: "numeric",
-                weekday: "long",
-              })}
-            </span>
-          </div>
+          {page !== "home" && <div className="page-heading journal-heading">
+            <h1>{page === "memories" ? "我们的收藏册" : page === "interaction" ? "一起做点什么？" : page === "plans" ? "未来清单" : "我的空间"}</h1>
+            <time dateTime={day}>{dateLabel(day)}</time>
+          </div>}
+          {(page === "interaction" || page === "plans") && <nav className="journal-sections" aria-label="一起做的栏目">
+            <button aria-current={page === "interaction" ? "page" : undefined} onClick={() => go("interaction")}>一起玩耍</button>
+            <button aria-current={page === "plans" ? "page" : undefined} onClick={() => go("plans")}>未来清单</button>
+          </nav>}
           {service.unreadable > 0 && (
             <div className="notice">
               有 {service.unreadable} 条记录暂时无法解密，请检查密钥备份。
@@ -1455,50 +1294,55 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
           <Suspense fallback={<p role="status">正在打开页面…</p>}>
           {page === "home" && (
             <>
-              <div className="home-top">
-                <section className="together-card">
-                  <div className="hero-doodle">
-                    <img src="/assets/flower.svg" alt="" />
-                  </div>
-                  <span className="tiny hero-label">
-                    <Heart size={12} /> TWO OF US
-                  </span>
-                  <div className="hero-avatars">
-                    <span className={`avatar ${memberAvatars[0].color} large`}>{memberAvatars[0].name}</span>
-                    <span className="heart-thread">♡</span>
-                    <span className={`avatar ${memberAvatars[1].color} large`}>{memberAvatars[1].name}</span>
-                  </div>
-                  <p className="together-caption">不知不觉，我们已经一起走过</p>
-                  <div className="together-number">
-                    {togetherDays(relationship?.data.date || day, day)}
-                    <span>天</span>
-                    <i>and counting…</i>
-                  </div>
-                  <span className="hero-since">
-                    从 {dateLabel(relationship?.data.date || day)}{" "}
-                    开始，每天都多一点喜欢。
-                  </span>
-                  <button
-                    className="relationship-settings"
-                    disabled={readOnly}
-                    onClick={() => edit("relationship", relationship)}
-                  >
-                    <CalendarDays size={13} />
-                    设置恋爱开始日期
-                    <ChevronRight size={12} />
-                  </button>
-                  <div className="hero-bottom">
-                    <span>
-                      <span className="dot" /> 故事还在继续
+              <div className="journal-dateline">
+                <time dateTime={day}>{dateLabel(day)}</time>
+                <div className="journal-byline side-space"><strong className="hero-avatars">{memberAvatars.map(x => x.name).join(" & ")}</strong></div>
+                <button type="button" disabled={readOnly} aria-label="设置恋爱开始日期" onClick={() => edit("relationship", relationship)}>
+                  在一起 <strong className="together-number">{togetherDays(relationship?.data.date || day, day)}<span>天</span></strong>
+                </button>
+              </div>
+              <JournalCover day={day} shared={sharedMemories} dates={entries} service={service} reduced={reduceMotion}
+                readOnly={!!readOnly} open={viewEntry} compose={openPhotoEditor}/>
+              <div className="quick-actions">
+                {[
+                  {
+                    icon: Feather,
+                    title: "写一篇日记",
+                    subtitle: "从一句话开始",
+                    action: () => edit("memory"),
+                  },
+                  {
+                    icon: ImagePlus,
+                    title: "收藏新照片",
+                    subtitle: "给相纸留出另一半",
+                    action: openPhotoEditor,
+                  },
+                  {
+                    icon: Mail,
+                    title: "给未来的信",
+                    subtitle: "选一个拆信日",
+                    action: () => edit("capsule"),
+                  },
+                  {
+                    icon: Sparkles,
+                    title: "随机一段回忆",
+                    subtitle: "重逢过去的某一天",
+                    action: randomMemory,
+                  },
+                ].map((q, i) => (
+                  <button key={q.title} disabled={readOnly && q.action !== randomMemory} onClick={q.action}>
+                    <span className={`quick-icon tone-${i}`}>
+                      <q.icon size={21} />
                     </span>
-                    <button type="button" className="text-button" onClick={() => go("plans", "anniversaries")}>
-                      {nextEvent
-                        ? `距离「${nextEvent.data.title}」还有 ${daysBetween(day, nextEvent.next)} 天`
-                        : "下一页，等我们一起写"}
-                      <ChevronRight size={12} />
-                    </button>
-                  </div>
-                </section>
+                    <span>
+                      <strong>{q.title}</strong>
+                      <small>{q.subtitle}</small>
+                    </span>
+                    <ChevronRight size={15} />
+                  </button>
+                ))}
+              </div>
+              <div className="journal-today-extra">
                 <section className="mood-card">
                   <div className="section-title">
                     <h2>
@@ -1536,52 +1380,13 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                     </div>
                     <span className="mood-cloud">☁</span>
                   </div>
-                  <div className="soft-note">
-                    <Leaf size={14} /> 每一种心情，都可以被温柔接住。
-                  </div>
+
                 </section>
-              </div>
-              <div className="quick-actions">
-                {[
-                  {
-                    icon: Feather,
-                    title: "写一篇日记",
-                    subtitle: "留住今天的小美好",
-                    action: () => edit("memory"),
-                  },
-                  {
-                    icon: ImagePlus,
-                    title: "收藏新照片",
-                    subtitle: "把瞬间变成永远",
-                    action: () => {
-                      flushSync(() => edit("memory"));
-                      document.querySelector<HTMLInputElement>('.modal input[aria-label="添加照片"]')?.click();
-                    },
-                  },
-                  {
-                    icon: Mail,
-                    title: "给未来的信",
-                    subtitle: "寄一份温柔的期待",
-                    action: () => edit("capsule"),
-                  },
-                  {
-                    icon: Sparkles,
-                    title: "随机一段回忆",
-                    subtitle: "重逢过去的某一天",
-                    action: randomMemory,
-                  },
-                ].map((q, i) => (
-                  <button key={q.title} disabled={readOnly && q.action !== randomMemory} onClick={q.action}>
-                    <span className={`quick-icon tone-${i}`}>
-                      <q.icon size={21} />
-                    </span>
-                    <span>
-                      <strong>{q.title}</strong>
-                      <small>{q.subtitle}</small>
-                    </span>
-                    <ChevronRight size={15} />
-                  </button>
-                ))}
+                <section className="journal-agenda"><CalendarDays size={21}/><h2>接下来的计划</h2>
+                  <p>{nextEvent ? `${dateLabel(nextEvent.next)} · ${nextEvent.data.title}` : "在日历上约一个两个人都有空的日子。"}</p>
+                  <button className="text-button" onClick={() => go("plans", "dates")}>翻看约会票 <ArrowRight size={15}/></button>
+                  {nextEvent && <button className="text-button" onClick={() => go("plans", "anniversaries")}>查看特别日子</button>}
+                </section>
               </div>
               {hosted && showCompanionship && (
                 <HomeCompanionship service={service} day={day} busy={busy} run={run} open={viewEntry} />
@@ -1589,10 +1394,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
               <div className="home-bottom">
                 <section>
                   <div className="section-title">
-                    <h2>
-                      最近的温柔时光
-                      <span className="title-note">OUR MEMORIES</span>
-                    </h2>
+                    <h2>最近收进来的</h2>
                     <button
                       className="text-button"
                       onClick={() => go("memories", "timeline")}
@@ -1602,9 +1404,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                     </button>
                   </div>
                   {showMemories(sharedMemories.slice(0, 2), true)}
-                  <div className="home-tip">
-                    <span>✧</span> 不一定要很特别。和你一起，就是值得记录的事。
-                  </div>
+
                 </section>
                 <section className="pet-card">
                   <div className="section-title">
@@ -1709,7 +1509,8 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                 </div>
                 <button
                   className="primary"
-                  onClick={() =>
+                    disabled={readOnly}
+                  onClick={() => section === "album" ? openPhotoEditor() :
                     edit(
                       section === "capsules"
                         ? "capsule"
@@ -1724,7 +1525,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                     ? "封存一份期待"
                     : section === "map"
                       ? "留下新足迹"
-                      : "记一笔"}
+                      : section === "album" ? "收藏新照片" : "记一笔"}
                 </button>
               </div>
               {section === "galaxy" && (!hosted || !showGalaxy) && (
@@ -1759,7 +1560,9 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                       />
                     </div>
                   </div>
-                  <div className="filter-detail">
+                  <details className="journal-filters">
+                    <summary>更多筛选{(monthFilter || authorFilter !== "全部" || tagFilter) && " · 已启用"}</summary>
+                    <div className="filter-detail">
                     <label>
                       月份{" "}
                       <input
@@ -1798,7 +1601,8 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                     >
                       重置
                     </button>
-                  </div>
+                    </div>
+                  </details>
                   {section === "timeline" ? (
                     <MemoryPages key={`timeline:${memoryFilters}`} label="回忆时间轴" items={filteredMemories} render={showMemories} />
                   ) : section === "galaxy" ? (
@@ -1842,11 +1646,8 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                   <div className="feature-banner capsule-banner">
                     <Mail size={58} />
                     <div>
-                      <span className="eyebrow">
-                        LET TIME KEEP A LITTLE SECRET
-                      </span>
-                      <h2>把现在，寄给未来的我们</h2>
-                      <p>有些话，等到那个特别的日子再慢慢读。</p>
+                      <h2>寄给未来的信</h2>
+                      <p>写下今天想说的话，约一个拆信日。</p>
                     </div>
                   </div>
                   <div className="cards-grid">
@@ -1865,9 +1666,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                               <LockKeyhole size={28} />
                             )}
                           </span>
-                          <span className="eyebrow">
-                            {e.data.category || "TIME CAPSULE"}
-                          </span>
+                          {e.data.category && <span className="eyebrow">{e.data.category}</span>}
                           <h3>{e.data.title}</h3>
                           <p>
                             {e.data.openedAt
@@ -1945,12 +1744,11 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                   <div className="feature-banner map-banner">
                     <MapPin size={48} />
                     <div>
-                      <span className="eyebrow">OUR LITTLE FOOTPRINTS</span>
-                      <h2>世界很大，想和你慢慢走</h2>
-                      <p>只记录我们主动留下的足迹，文字地点也很美好。</p>
+                      <h2>我们的足迹明信片</h2>
+                      <p>从去过的地方寄一张，写下想记住的事。</p>
                     </div>
                     <span className="map-count">
-                      {entries.filter((e) => e.data.kind === "place").length}
+                      {places.length}
                       <small>处共同记忆</small>
                     </span>
                   </div>
@@ -1960,9 +1758,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                       <span className="map-land land-a" />
                       <span className="map-land land-b" />
                       <span className="map-label">OUR MEMORY MAP</span>
-                      {entries
-                        .filter((e) => e.data.kind === "place")
-                        .slice(0, 9)
+                      {places.slice(0, 9)
                         .map((e, i) => (
                           <button
                             style={{
@@ -1978,16 +1774,14 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                           </button>
                         ))}
                       <span className="map-disclaimer">
-                        足迹手绘示意 · 点按标记回看故事
+                        {places.length > 9 ? "地图显示最近 9 处足迹，完整记录见列表" : "足迹手绘示意 · 点按标记回看故事"}
                       </span>
                     </div>
                     <div>
                       <div className="section-title">
                         <h2>一起去过的地方</h2>
                       </div>
-                      {entries
-                        .filter((e) => e.data.kind === "place")
-                        .map((e) => (
+                      {places.map((e) => (
                           <button
                             className="place-row"
                             key={e.id}
@@ -2013,16 +1807,12 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
               {section === "report" && (
                 <div className="report-page">
                   <div className="report-cover">
-                    <span className="eyebrow">
-                      OUR DAYS, BEAUTIFULLY COLLECTED
-                    </span>
                     <h2>
                       {day.slice(0, 4)}
                       <span>
                         我们的{reportRange === "year" ? "这一年" : "这个月"}
                       </span>
                     </h2>
-                    <p>生活里的小小片刻，原来已经攒了这么多。</p>
                     <div className="pills">
                       <button
                         className={reportRange === "month" ? "selected" : ""}
@@ -2246,16 +2036,16 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
 
           {page === "interaction" && (
             <>
-              <div className="toolbar">
+              {section !== "games" && <div className="toolbar">
                 <div className="pills">
                   {[
-                    ["games", "一起玩耍"],
                     ["pet", "糯米的小屋"],
                     ["question", "每日问答"],
                     ["quiz", "默契小问答"],
                     ["roulette", "约会转盘"],
                     ["truth", "真心话"],
-                    ...(hosted ? [["food", "今天吃什么"], ["wardrobe", "今天穿什么"]] : []),
+                    ["food", "今天吃什么"],
+                    ...(hosted ? [["wardrobe", "今天穿什么"]] : []),
                   ].map(([id, name]) => (
                     <button
                       className={section === id ? "selected" : ""}
@@ -2268,24 +2058,22 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                     </button>
                   ))}
                 </div>
-              </div>
+              </div>}
               {section === "food" && hosted && <MealDecision service={service} busy={busy} run={run} open={viewEntry} />}
+              {section === "food" && !hosted && <MealNotebook service={service} busy={busy} run={run} open={viewEntry} />}
               {section === "wardrobe" && hosted && <Wardrobe service={service} busy={busy} run={run}
-                photo={(attachment) => <Photo photo={attachment} visibility="private" service={service} />} />}
+                photo={(attachment, visibility) => <Photo photo={attachment} visibility={visibility} service={service} />} />}
               {section === "games" && (
                 <>
-                  <div className="feature-banner play-banner">
-                    <Gamepad2 size={55} />
-                    <div>
-                      <span className="eyebrow">
-                        SOME QUALITY TIME TOGETHER
-                      </span>
-                      <h2>和你一起，普通小事也很好玩</h2>
-                      <p>对方不在线也没关系，答案会好好等着。</p>
-                    </div>
+                  <div className="activity-spread">
+                    <button className="activity-meal" onClick={() => setSection("food")}><Utensils size={24}/><strong>今天吃什么？</strong>
+                      <span>{hosted ? "选一道两个人都想吃的菜" : "给今天这顿饭留张小票"} <ArrowRight size={16}/></span></button>
+                    <button className="activity-date" onClick={() => go("plans", "dates")}><CalendarDays size={23}/><strong>约个日子见面</strong>
+                      <span>打开双人约会票 <ArrowRight size={16}/></span></button>
                   </div>
                   <div className="game-grid">
                     {[
+                      ...(hosted ? [{ id: "wardrobe", icon: Shirt, title: "今天穿什么", text: "从自己的衣橱挑几件，让对方帮你搭一身。", note: "打开双人衣橱" }] : []),
                       {
                         id: "pet",
                         icon: Heart,
@@ -2830,43 +2618,21 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
           )}
           </Suspense>
           <footer className="app-footer">
-            <span>一点日常，一点喜欢，一点属于我们的小幸福。</span>
-            <span>
-              MADE FOR US <Heart size={10} />
-            </span>
+            <span>Us. / 生活收集册</span><CoverCredits/>
           </footer>
         </div>
       </main>
-      <nav className="mobile-nav" aria-label="移动端主导航">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            aria-current={page === t.id ? "page" : undefined}
-            className={page === t.id ? "active" : ""}
-            onClick={() =>
-              go(
-                t.id,
-                t.id === "memories"
-                  ? "timeline"
-                  : t.id === "interaction"
-                    ? "games"
-                    : t.id === "plans"
-                      ? "wishes"
-                      : undefined,
-              )
-            }
-          >
-            <t.icon size={21} />
-            <span>{t.sub}</span>
-          </button>
-        ))}
+      <nav className="mobile-nav journal-mobile" aria-label="移动端主导航">
+        {tabs.map(t => <button key={t.id} aria-current={(page === t.id || (page === "plans" && t.id === "interaction")) ? "page" : undefined}
+          onClick={() => go(t.id)}><t.icon size={19}/><span>{t.sub}</span></button>)}
+        <button aria-current={page === "profile" ? "page" : undefined} onClick={() => go("profile")}><UserRound size={19}/><span>我的</span></button>
       </nav>
       {toast && (
         <div className="toast" role="status">
           {toast}
         </div>
       )}
-      {modal.startsWith("edit:") && !readOnly && (
+      {modal.startsWith("edit:") && (
         <Modal
           title={
             modal === "edit:relationship" ||
@@ -2874,41 +2640,46 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
               ? "设置恋爱开始日期"
               : editing
                 ? "再添一笔，慢慢珍藏"
-                : kindNames[modal.slice(5)] || "记下这份温柔"
+                : modal === "edit:memory" && photoEditor ? "留一张相纸" : kindNames[modal.slice(5)] || "记一笔"
           }
           subtitle={
             modal === "edit:relationship" ||
             editing?.data.category === "relationship"
               ? "首页会从这一天开始计算我们的在一起天数。"
-              : "把此刻的心情，好好放在这一页。"
+              : photoEditor && modal === "edit:memory" ? "一张照片就能保存。选“我们两个人”，对方也可以接上一张。" : undefined
           }
           close={requestEditorClose}
           wide
         >
-          <RecordEditor
-            key={editing?.id ?? modal}
-            kind={modal.slice(5)}
-            initialTitle={editorTitle}
-            service={service}
-            existing={editing}
-            busy={busy}
-            run={run}
-            done={finishEditor}
-            dirty={editorDirty}
-          />
+          {readOnly && <p role="status">空间已进入只读期。撤销关闭后可继续编辑。</p>}
+          <div inert={readOnly}>
+            <RecordEditor
+              key={editing?.id ?? (photoEditor ? "new-photo" : modal)}
+              photoMode={photoEditor && modal === "edit:memory"}
+              kind={modal.slice(5)}
+              initialTitle={editorTitle}
+              service={service}
+              existing={editing}
+              busy={busy || readOnly}
+              run={run}
+              done={finishEditor}
+              dirty={editorDirty}
+            />
+          </div>
         </Modal>
       )}
       {modal === "nickname" && (
         <Modal title="修改昵称" close={close}>
           <form onSubmit={(event) => {
             event.preventDefault();
+            if (busy || readOnly) return;
             void run(async () => { await service.saveDisplayName(nickname); close(); }, "昵称已保存");
           }}>
             <Field label="共同空间显示的昵称">
-              <input value={nickname} maxLength={32} placeholder={hosted?.owner ? firstAvatar.name : secondAvatar.name}
+              <input value={nickname} disabled={busy || readOnly} maxLength={32} placeholder={hosted?.owner ? firstAvatar.name : secondAvatar.name}
                 onChange={(event) => setNickname(event.target.value)} />
             </Field>
-            <button className="primary full" disabled={busy}>保存昵称</button>
+            <button className="primary full" disabled={busy || readOnly}>保存昵称</button>
           </form>
         </Modal>
       )}
@@ -2923,7 +2694,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
               <button
                 className="secondary"
                 key={m}
-                disabled={busy}
+                disabled={busy || readOnly}
                 onClick={() =>
                   run(async () => {
                     await service.save(
@@ -2948,7 +2719,16 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
           close={closeDetail}
           wide
         >
-          <div className="detail-photos">
+          {detail.data.kind !== "memory" && <RecordPaper data={detail.data} reveal/>}
+          {receiptOf(detail.data) && <div className="receipt-detail">
+            <MealSlip receipt={receiptOf(detail.data)!} date={detail.data.date} names={service.displayNames} userId={service.userId}/>
+            {detail.visibility === "shared" && <div className="stamp-choices" aria-label="为这顿饭盖章">
+              {(Object.keys(stampNames) as MealStamp[]).map(stamp => <button key={stamp} className="secondary"
+                disabled={busy || readOnly} aria-pressed={receiptOf(detail.data)?.stamps?.[service.userId] === stamp}
+                onClick={() => run(() => stampMeal(service, detail.id, stamp), "已盖上你的餐后印章")}>{stampNames[stamp]}</button>)}
+            </div>}
+          </div>}
+          <div className={`detail-photos ${detail.data.photoPage ? "photo-spread" : ""}`}>
             {detail.data.photos?.map((p) => (
               <Photo
                 key={p.id}
@@ -2958,8 +2738,19 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
               />
             ))}
           </div>
+          {canReplyToPhoto(detail, service.userId) && <PhotoReplyButton disabled={!!readOnly || busy} onFile={file => {
+            void run(async () => {
+              const session = service.secrets;
+              const prepared = await prepareBrowserPhoto(file);
+              const bytes = new Uint8Array(await prepared.arrayBuffer());
+              if (!session || service.secrets !== session) throw new AppError("LOCKED", "请重新解锁空间");
+              const photo = await service.addPhoto(bytes, prepared.type, file.name, "shared");
+              if (service.secrets !== session) throw new AppError("LOCKED", "请重新解锁空间");
+              await finishPhotoPair(service, detail.id, photo);
+            }, "两个人的照片已拼在同一页");
+          }}/>}
           <p className="detail-body">
-            {detail.data.body || "这个瞬间，本身就很好。"}
+            {detail.data.body}
           </p>
           <div className="tags">
             {detail.data.tags?.map((t) => (
@@ -3056,6 +2847,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
           <p className="muted">内容会保留在回收站，可以恢复。</p>
           <button
             className="primary full"
+            disabled={busy || readOnly}
             onClick={() =>
               run(async () => {
                 await service.trash(detail);
@@ -3249,7 +3041,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                   <small>{d.id.slice(0, 16)}…</small>
                 </span>
                 {hosted && service.ready && d.id !== service.secrets!.deviceId && (
-                  <button className="text-button" disabled={busy || fingerprint(d) !== verificationCode.trim().toUpperCase().replace(/\s+/g, " ")} onClick={() =>
+                  <button className="text-button" disabled={busy || readOnly || fingerprint(d) !== verificationCode.trim().toUpperCase().replace(/\s+/g, " ")} onClick={() =>
                     runSensitive("putTransfer", "发送空间密钥", () => service.transfer(d, verificationCode.trim()), "空间密钥已发送")
                   }>发送空间密钥</button>
                 )}
@@ -3257,6 +3049,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                   d.userId === service.userId && (
                     <button
                       className="text-button"
+                      disabled={busy || readOnly}
                       onClick={() =>
                         runSensitive("revokeDevice", "撤销设备", async () => {
                           await service.call("revokeDevice", {
@@ -3272,7 +3065,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
               </div>
             ))}
           </div>
-          {hosted && <button className="secondary full" disabled={busy || !verificationCode.trim()} onClick={() =>
+          {hosted && <button className="secondary full" disabled={busy || readOnly || !verificationCode.trim()} onClick={() =>
             run(() => service.receive(verificationCode.trim()), "空间密钥已接收")
           }>接收空间密钥</button>}
           <button
@@ -3456,6 +3249,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
           </p>}
           <form onSubmit={(event) => {
             event.preventDefault();
+            if (busy || (readOnly && authorization.action !== "closeSpace" && authorization.action !== "cancelClose")) return;
             const attempt = ++authorizationAttempt.current;
             const device = service.secrets;
             const password = websitePassword;
@@ -3473,7 +3267,8 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
               <PasswordInput value={websitePassword} autoComplete="current-password" required
                 onChange={(event) => setWebsitePassword(event.target.value)} />
             </Field>
-            <button className="primary full" disabled={busy || !websitePassword}>验证并继续</button>
+            <button className="primary full" disabled={busy || !websitePassword ||
+              (readOnly && authorization.action !== "closeSpace" && authorization.action !== "cancelClose")}>验证并继续</button>
           </form>
         </Modal>
       )}
@@ -3503,6 +3298,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
           </p>
           <button
             className="danger-button full"
+            disabled={busy || readOnly}
             onClick={() =>
               run(async () => {
                 await service.purge(detail);

@@ -299,6 +299,11 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
     expect(filesCachedByWorker).toContain("/offline-shell.html");
     expect(filesCachedByWorker.every((path) => path === "/offline-shell.html" || path === "/__us-shell-installed" ||
       path === "/manifest.webmanifest" || path.startsWith("/assets/"))).toBe(true);
+    fixture.setUpstreamUnavailable(true);
+    expect((await b.request.get(`${origin}/healthz`)).status()).toBe(503);
+    await b.goto(`${origin}/app/memories`);
+    await expect(b.getByRole("heading", { name: "离线日记" })).toBeVisible();
+    fixture.setUpstreamUnavailable(false);
     // Engine network emulation is not applied to service worker sessions, so the fixture
     // must also stop forwarding: otherwise the worker answers navigations from the live
     // server instead of falling back to the cached offline shell.
@@ -505,7 +510,13 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
       await expect(tab.getByRole("region", { name: "选餐候选" }).getByText(name, { exact: true })).toBeVisible();
     }
     await addMeal(a, "清汤面", "24", "");
+    await a.getByLabel("清汤面偏好").selectOption("want");
     await addMeal(b, "花生拌面", "32", "花生");
+    await a.bringToFront();
+    await a.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+    await expect(a.getByLabel("花生拌面偏好")).toBeVisible();
+    await expect(a.getByLabel("清汤面偏好")).toHaveValue("want");
+    await expect(a.getByText(/已保留仍在列表中的选择/)).toBeVisible();
     await b.getByText("预算与忌口", { exact: true }).click();
     await b.getByLabel(/我的忌口标签/).fill("花生");
     await b.getByRole("button", { name: "保存忌口" }).click();
@@ -526,6 +537,12 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
     await a.getByRole("button", { name: "查看共同回忆" }).click();
     await expect(a.getByRole("dialog").getByRole("heading", { name: "晚餐吃清汤面" })).toBeVisible();
     await expect(a.getByRole("dialog").locator(".detail-body")).toHaveText("预计预算 24 元");
+    await a.getByRole("dialog").getByRole("button", { name: "还想再来" }).click();
+    await expect(a.getByRole("dialog").locator(".ink-stamp")).toHaveCount(1);
+    await b.getByRole("button", { name: "查看共同回忆" }).click();
+    await b.getByRole("dialog").getByRole("button", { name: "下次换一家" }).click();
+    await expect(b.getByRole("dialog").locator(".ink-stamp")).toHaveCount(2);
+    await expect(b.getByRole("dialog").locator(".meal-slip")).toContainText("合成昵称 · 下次换一家");
 
     for (const tab of [a, b]) {
       await tab.goto(`${origin}/app/play/wardrobe`);
@@ -541,6 +558,8 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
     await a.getByRole("button", { name: "添加私人衣物" }).click();
     await expect(a.getByLabel("共享 未共享的裤子")).toBeVisible();
     await a.getByLabel("共享 合成白衬衫").check();
+    const publishPhoto = a.getByLabel("同时共享 合成白衬衫 的照片");
+    await expect(publishPhoto).not.toBeChecked();
     await a.getByLabel("天气备注（可留空）").fill("阴天");
     await a.getByRole("button", { name: "更新共享衣物" }).click();
     await expect(a.getByRole("button", { name: "撤回全部共享" })).toBeVisible();
@@ -550,6 +569,16 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
     await otherCloset.getByLabel("上装").selectOption({ label: "合成白衬衫" });
     await expect(otherCloset.getByLabel("下装")).toHaveCount(0);
     await expect(b.getByRole("img", { name: "wardrobe-private.png" })).toHaveCount(0);
+    await expect(otherCloset.getByRole("img")).toHaveCount(0);
+    await publishPhoto.check();
+    await a.getByRole("button", { name: "更新共享衣物" }).click();
+    await expect(a.getByText(/已共享名称和照片/)).toBeVisible();
+    const photoRequest = b.waitForRequest((request) => request.url().endsWith("/api/space") && request.postDataJSON()?.action === "fileGet");
+    await b.reload();
+    const previewRequest = (await photoRequest).postDataJSON();
+    const sharedPreview = otherCloset.getByRole("img", { name: "合成白衬衫的共享预览" });
+    await expect.poll(() => sharedPreview.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(12);
+    await otherCloset.getByLabel("上装").selectOption({ label: "合成白衬衫" });
     await otherCloset.getByRole("button", { name: "发送搭配建议" }).click();
     await expect(b.getByRole("status")).toHaveText("已发送搭配建议");
     await a.reload();
@@ -565,8 +594,21 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
     const wardrobeFiles = unzipSync(await readFile(await wardrobeArchive.path()));
     const wardrobeRecords = strFromU8(wardrobeFiles["records.json"]);
     expect(wardrobeRecords).toContain("合成白衬衫");
+    expect(wardrobeRecords).toContain("合成白衬衫的共享预览");
     expect(wardrobeRecords).not.toContain("未共享的裤子");
     expect(wardrobeRecords).not.toContain("wardrobe-private.png");
+    await publishPhoto.uncheck();
+    await a.getByRole("button", { name: "更新共享衣物" }).click();
+    await expect(a.getByText(/已共享名称和照片/)).toHaveCount(0);
+    await b.goto(`${origin}/app/play/wardrobe`);
+    await expect(otherCloset.getByLabel("上装")).toBeVisible();
+    await expect(sharedPreview).toHaveCount(0);
+    const revokedPreview = await b.request.post(`${origin}/api/space`, {
+      data: { ...previewRequest, data: { ...previewRequest.data, cached: true } },
+      headers: { Origin: origin, "X-Us-Account": "second" },
+    });
+    expect(await revokedPreview.json()).toMatchObject({ success: false, error: { code: "FORBIDDEN" } });
+    await expect(a.getByRole("img", { name: "wardrobe-private.png" })).toBeVisible();
     await a.getByRole("button", { name: "撤回全部共享" }).click();
     await expect(a.getByRole("button", { name: "撤回全部共享" })).toHaveCount(0);
     await b.goto(`${origin}/app/play/wardrobe`);
@@ -669,7 +711,7 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
     await galaxy.getByRole("button", { name: "星图", exact: true }).click();
     await expect(galaxy.getByRole("button", { name: /^打开 / })).toHaveCount(20);
     await galaxy.getByRole("button", { name: "放大", exact: true }).click();
-    const star = galaxy.getByRole("button", { name: "打开 warm-offline.png", exact: true });
+    const star = galaxy.getByRole("button", { name: /^打开 待同步的共同日记 .*warm-offline\.png$/ });
     await star.focus();
     await star.press("Enter");
     const selected = galaxy.getByRole("region", { name: "选中的回忆照片" });
@@ -808,6 +850,11 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
     await b.goto(`${origin}/app/memories`);
     await openEditor(b, "待同步的共同日记");
     await b.getByLabel("慢慢写，不用着急").fill("本机保留的冲突正文");
+    await b.context().setOffline(true);
+    await b.getByLabel("添加照片").setInputFiles({
+      name: "conflict-copy.png", mimeType: "image/png", buffer: Buffer.from(png, "base64"),
+    });
+    await expect(b.getByRole("dialog").getByRole("listitem").filter({ hasText: "conflict-copy.png" })).toBeVisible();
     await b.getByRole("button", { name: "先存本机，稍后同步" }).click();
     await expect(b.getByRole("dialog")).toHaveCount(0);
     await a.goto(`${origin}/app/memories`);
@@ -817,6 +864,7 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
     await expect(a.getByRole("dialog")).toHaveCount(0);
     await a.getByRole("heading", { name: "待同步的共同日记", exact: true }).click();
     await expect(a.getByRole("dialog").locator(".detail-body")).toHaveText("先到达服务端的正文");
+    await b.context().setOffline(false);
     await b.goto(`${origin}/app/settings`);
     await b.getByRole("button", { name: /连接与同步/ }).click();
     const conflicting = b.getByRole("region", { name: "待同步队列" });
@@ -824,9 +872,25 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
     await conflicting.getByText("待同步的共同日记", { exact: true }).click();
     await expect(conflicting.getByText("服务端已有更新，可查看并复制本机版本")).toBeVisible();
     await expect(conflicting.getByText("本机保留的冲突正文")).toBeVisible();
+    const originalDraft = conflicting.locator("details").filter({ has: b.getByText("本机保留的冲突正文", { exact: true }) }).first();
+    await originalDraft.getByText("查看离线照片", { exact: true }).click();
+    await expect(originalDraft.getByRole("img", { name: "conflict-copy.png" })).toBeVisible();
+    await originalDraft.getByRole("button", { name: "另存为新日记" }).click();
+    await b.getByLabel("新日记标题").fill("冲突后另存的日记");
+    await b.getByLabel("新日记正文").fill("已核对的本机正文");
+    await b.getByLabel("保留照片 warm-offline.png").uncheck();
+    await b.getByRole("button", { name: "保存新日记到待同步队列" }).click();
+    await expect(conflicting.getByRole("heading")).toHaveText("待同步队列（2）");
     b.once("dialog", (dialog) => dialog.accept());
-    await conflicting.getByRole("button", { name: "移除此项" }).click();
+    await originalDraft.getByRole("button", { name: "移除此项" }).click();
+    await expect(conflicting.getByRole("heading")).toHaveText("待同步队列（1）");
+    await conflicting.getByRole("button", { name: "同步待发送日记" }).click();
     await expect(conflicting.getByRole("heading")).toHaveText("待同步队列（0）");
+    await b.goto(`${origin}/app/memories`);
+    await b.getByRole("heading", { name: "冲突后另存的日记", exact: true }).click();
+    await expect(b.getByRole("dialog").locator(".detail-body")).toHaveText("已核对的本机正文");
+    await expect(b.getByRole("dialog").getByRole("img", { name: "conflict-copy.png" })).toBeVisible();
+    await expect(b.getByRole("dialog").getByRole("img", { name: "warm-offline.png" })).toHaveCount(0);
 
     await exerciseWebWorkload({ a, b, origin, database: join(dir, "e2e.sqlite"), password: firstPhrase, png, info });
     await b.goto(`${origin}/app/settings`);
@@ -840,9 +904,18 @@ test("独立浏览器配对、同步图文、隔离私人记录并恢复解锁",
     await expect(b.getByRole("checkbox", { name: "在此浏览器记住解锁 24 小时" })).not.toBeChecked();
     await b.getByLabel("本机解锁口令", { exact: false }).fill(secondPhrase);
     await b.getByRole("button", { name: "打开小世界" }).click();
-    await b.getByRole("button", { name: "时光", exact: true }).first().click();
+    await b.getByRole("button", { name: "收藏册", exact: true }).first().click();
     await b.getByRole("textbox", { name: "搜索回忆" }).fill("第一位更新的标题");
     await expect(b.getByText("第一位更新的标题", { exact: true })).toBeVisible();
+    await b.getByRole("heading", { name: "第一位更新的标题", exact: true }).click();
+    const secondPhoto = b.waitForEvent("filechooser");
+    await b.getByRole("dialog").getByRole("button", { name: "接上我的半张" }).click();
+    await (await secondPhoto).setFiles({ name: "reply.png", mimeType: "image/png", buffer: Buffer.from(png, "base64") });
+    await expect(b.getByRole("dialog").getByRole("img", { name: "reply.png" })).toBeVisible();
+    await expect(b.getByRole("button", { name: "接上我的半张" })).toHaveCount(0);
+    await a.goto(b.url());
+    await expect(a.getByRole("dialog").getByRole("img", { name: "reply.png" })).toBeVisible();
+    await expect(a.getByRole("dialog").getByRole("img", { name: "fixture.png" })).toBeVisible();
     const peer = await b.context().newPage();
     await peer.goto(`${origin}/app/settings`);
     await peer.getByRole("button", { name: "退出网站账号" }).click();

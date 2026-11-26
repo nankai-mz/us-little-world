@@ -20,6 +20,7 @@ export async function prepareBrowserPhoto(file: File): Promise<Blob> {
   const bitmap = await createImageBitmap(file.slice(0, file.size, mime), { imageOrientation: "from-image" })
     .catch(() => { throw invalidImage(); });
   const canvas = document.createElement("canvas");
+  let pngOnly = false;
   try {
     const result = await fitPhoto(
       {
@@ -39,23 +40,23 @@ export async function prepareBrowserPhoto(file: File): Promise<Blob> {
             "当前浏览器无法处理照片，请更新浏览器后重试",
           );
         context.drawImage(bitmap, 0, 0, width, height);
-        const encode = (type: string) => new Promise<Blob>((resolve, reject) =>
-          canvas.toBlob(
-            (value) =>
-              value
-                ? resolve(value)
-                : reject(new AppError("INVALID_IMAGE", "照片压缩暂时失败")),
-            type,
-            quality / 100,
-          ),
-        );
-        let blob: Blob;
-        if (mime === "image/png" && quality === 82) {
-          blob = await encode("image/png");
-          if (blob.size > MAX_PHOTO_BYTES) blob = await encode("image/webp");
-        } else {
-          blob = await encode(mime === "image/png" ? "image/webp" : mime);
+        const encode = (type: string, level = quality) => new Promise<Blob | null>((resolve) =>
+          canvas.toBlob(resolve, type, level / 100));
+        let blob = mime === "image/png" && !pngOnly && quality !== 82 ? null : await encode(mime);
+        if (mime === "image/png" && !pngOnly && (!blob || blob.size > MAX_PHOTO_BYTES)) {
+          // Try lower WebP quality at the largest resolution before reducing the pixel dimensions.
+          for (const level of quality === 82 ? [82, 66, 50] : [quality]) {
+            const webp = await encode("image/webp", level);
+            if (webp?.type !== "image/webp") {
+              pngOnly = true;
+              blob = webp ?? blob ?? await encode("image/png");
+              break;
+            }
+            blob = webp;
+            if (blob.size <= MAX_PHOTO_BYTES) break;
+          }
         }
+        if (!blob) throw new AppError("INVALID_IMAGE", "照片压缩暂时失败");
         return { value: blob, size: blob.size, mime: blob.type, width, height };
       },
       { alwaysEncode: true },

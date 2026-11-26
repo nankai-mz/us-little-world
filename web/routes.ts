@@ -7,7 +7,7 @@ const pages = {
 } as const;
 
 export type WebPage = keyof typeof pages;
-type RecordTarget = { kind: "new" } | { kind: "detail" | "edit"; id: string };
+type RecordTarget = { kind: "new"; photo?: boolean } | { kind: "detail" | "edit"; id: string };
 export type PairingStep = "create" | "join" | "keys";
 export type WebRoute = { page: WebPage; section: string; pathname: string; record?: RecordTarget; pairing?: PairingStep };
 

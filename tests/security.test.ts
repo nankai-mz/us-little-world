@@ -31,6 +31,7 @@ import {
   secureChoice,
 } from "../src/core/domain";
 import { createApi } from "../src/server/api";
+import { canReplyToPhoto, finishPhotoPair, rebaseJournalEdit, receiptOf, stampMeal } from "../src/core/keepsakes";
 import { MemoryRepository } from "../src/server/memory-repo";
 import { MAX_PHOTO_BYTES, MAX_PHOTO_CIPHERTEXT, PHOTO_UPLOAD_PART_SIZE } from "../src/core/photos";
 import {
@@ -249,6 +250,43 @@ async function setup() {
   };
 }
 describe("云端权限、并发与客户端集成", () => {
+  it("两位成员同时给旧版餐桌小票盖章，各自的印章和原记录都保留", async () => {
+    const { a, b, repo } = await setup();
+    const data: Payload = { kind: "memory", title: "晚餐吃葱油面", body: "多加了一把葱", date: a.day, tags: ["今天吃什么"] };
+    expect(receiptOf({ ...data, tags: ["日记"] })).toBeUndefined();
+    const meal = await a.save(data);
+    await Promise.all([stampMeal(a, meal.id, "again"), stampMeal(b, meal.id, "other")]);
+    await b.refresh();
+    const stamped = b.active.find(e => e.id === meal.id)!;
+    expect(stamped.data).toMatchObject({ body: data.body, mealReceipt: { dish: "葱油面", meal: "晚餐", stamps: { alice: "again", bob: "other" } } });
+    const edited = rebaseJournalEdit(data, { ...data, mealReceipt: { dish: "手擀面", meal: "晚餐" } }, stamped.data);
+    expect(edited).toMatchObject({ title: "晚餐吃手擀面", mealReceipt: { stamps: { alice: "again", bob: "other" } } });
+    await stampMeal(b, meal.id, "other");
+    expect(b.active.find(e => e.id === meal.id)?.revision).toBe(stamped.revision);
+    expect(JSON.stringify(repo.data)).not.toContain("葱油面");
+  });
+  it("共同相纸只接受对方的一次接图，并保留两张加密照片", async () => {
+    const { a, b } = await setup();
+    const first = await a.addPhoto(new Uint8Array([1, 2]), "image/png", "早晨.png", "shared");
+    const second = await b.addPhoto(new Uint8Array([3, 4]), "image/png", "傍晚.png", "shared");
+    const sheet = await a.save({ kind: "memory", title: "窗外", date: a.day, photos: [first], photoPage: true });
+    expect(canReplyToPhoto(sheet, a.userId)).toBe(false);
+    expect(canReplyToPhoto({ ...sheet, visibility: "private" }, b.userId)).toBe(false);
+    await expect(finishPhotoPair(a, sheet.id, first)).rejects.toMatchObject({ code: "PHOTO_CHANGED" });
+    expect(canReplyToPhoto(sheet, b.userId)).toBe(true);
+    await finishPhotoPair(b, sheet.id, second);
+    await finishPhotoPair(b, sheet.id, second);
+    await expect(finishPhotoPair(b, sheet.id, first)).rejects.toMatchObject({ code: "PHOTO_CHANGED" });
+    await a.refresh();
+    const pair = a.active.find(e => e.id === sheet.id)!;
+    expect(pair.data.photos?.map(p => p.id)).toEqual([first.id, second.id]);
+    const localPhoto = { ...first, id: "later-photo" };
+    const edited = rebaseJournalEdit(sheet.data, { ...sheet.data, photos: [localPhoto] }, pair.data);
+    expect(edited.photos?.map(photo => photo.id)).toEqual([second.id, localPhoto.id]);
+    expect(edited.replyPhotoId).toBe(second.id);
+    expect(await a.readPhoto(pair.data.photos![1], "shared")).toBe("AwQ=");
+    expect(canReplyToPhoto(pair, b.userId)).toBe(false);
+  });
   it("同一天不同问题分别保存，双方对同一题异步回答后合并", async () => {
     const { a, b } = await setup();
     await a.answer("第一个话题", "A 的第一个答案");

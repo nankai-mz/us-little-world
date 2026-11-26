@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { createContext, useContext, useEffect, useRef, useState, type PropsWithChildren, type ReactNode } from "react";
 
 type InstallPrompt = Event & { prompt(): Promise<{ outcome: "accepted" | "dismissed" }> };
+const InstallControls = createContext<ReactNode>(null);
 
-export function WebInstall({ target }: { target: HTMLElement | null }) {
+export function WebInstall({ children }: PropsWithChildren) {
   const [install, setInstall] = useState<InstallPrompt>();
   const [update, setUpdate] = useState<ServiceWorker>();
   const [installed, setInstalled] = useState(() => window.matchMedia("(display-mode: standalone)").matches);
@@ -50,7 +50,7 @@ export function WebInstall({ target }: { target: HTMLElement | null }) {
       navigator.serviceWorker.removeEventListener("controllerchange", controllerChanged);
     };
   }, []);
-  return target ? createPortal(
+  const controls = (
     <section aria-label="安装与更新" className="pwa-controls">
       {update && <button type="button" className="secondary" onClick={() => {
         applying.current = true;
@@ -66,6 +66,11 @@ export function WebInstall({ target }: { target: HTMLElement | null }) {
         <p>如果浏览器菜单有「安装」或「添加到主屏幕」，可从那里添加。在 iPhone 的 Safari 可从分享菜单添加。</p>
       </details>}
       {!supported && <p>当前浏览器不能启用安装或离线启动，可继续使用网页。</p>}
-    </section>, target,
-  ) : null;
+    </section>
+  );
+  return <InstallControls.Provider value={controls}>{children}</InstallControls.Provider>;
+}
+
+export function WebInstallControls() {
+  return useContext(InstallControls);
 }

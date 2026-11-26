@@ -52,3 +52,23 @@ it("不接受改名成 JPG 的其他格式", async () => {
   await expect(prepareBrowserPhoto(file)).rejects.toMatchObject({ code: "INVALID_IMAGE" });
   expect(decode).not.toHaveBeenCalled();
 });
+
+it.each([true, false])("大 PNG 优先保留分辨率，无 WebP 编码时继续使用 PNG（支持 WebP：%s）", async (supportsWebp) => {
+  const file = new File([Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a)], "screen.png");
+  const canvas = {
+    width: 0, height: 0,
+    getContext: () => ({ drawImage: vi.fn() }),
+    toBlob: vi.fn((callback: (blob: Blob) => void, type: string, quality: number) => {
+      const mime = supportsWebp ? type : "image/png";
+      const fits = mime === "image/webp" ? quality < 0.82 : canvas.width < 1920;
+      callback(new Blob([new Uint8Array(fits ? 100 : MAX_PHOTO_BYTES + 1)], { type: mime }));
+    }),
+  };
+  vi.stubGlobal("document", { createElement: () => canvas });
+  vi.stubGlobal("createImageBitmap", async () => ({ width: 1920, height: 1080, close: vi.fn() }));
+  const image = await prepareBrowserPhoto(file);
+  expect(image.type).toBe(supportsWebp ? "image/webp" : "image/png");
+  expect(canvas.toBlob.mock.calls.map(([, type, quality]) => [type, quality])).toEqual([
+    ["image/png", 0.82], ["image/webp", 0.82], supportsWebp ? ["image/webp", 0.66] : ["image/png", 0.72],
+  ]);
+});

@@ -1,9 +1,9 @@
 import { useState, type ReactNode } from "react";
 import type { UsService } from "../src/core/service";
-import { AppError, type Attachment, type Entry } from "../src/core/types";
+import { AppError, type Attachment, type Entry, type Visibility } from "../src/core/types";
 import {
   addWardrobeItem, privateWardrobe, publishWardrobe, respondToWardrobe, suggestWardrobe,
-  visibleItemId, wardrobeNameLimit, wardrobeSelection, wardrobeSlots, wardrobeSuggestion, wardrobeWeatherLimit, type WardrobeSlot,
+  visibleItemId, wardrobeNameLimit, wardrobePreviewLimit, wardrobeSelection, wardrobeSlots, wardrobeSuggestion, wardrobeWeatherLimit, type WardrobeSlot,
 } from "../src/core/wardrobe";
 import { prepareBrowserPhoto } from "./photos";
 
@@ -16,20 +16,35 @@ function WardrobeShareForm({ service, items, selection, busy, run }: {
   const edition = published?.edition ?? 0;
   const [selected, setSelected] = useState(() => items.filter((item) => selection &&
     published?.items.some(({ id }) => id === visibleItemId(selection.id, item.id))).map(({ id }) => id));
+  const [previewIds, setPreviewIds] = useState(() => items.filter((item) => selection &&
+    published?.items.some(({ id, photoId }) => photoId && id === visibleItemId(selection.id, item.id))).map(({ id }) => id));
   const [weather, setWeather] = useState(published?.weather ?? "");
   return (
     <form onSubmit={(event) => {
       event.preventDefault();
-      void run(() => publishWardrobe(service, selected, weather, edition), "共享衣物已更新");
+      void run(() => publishWardrobe(service, selected, weather, edition, previewIds), "共享衣物已更新");
     }}>
       <h3>选择共享衣物</h3>
-      <p>仅共享选中衣物的名称、类别和所填天气。照片留在私人衣橱。</p>
+      <p>默认共享名称、类别和所填天气。可为最多 {wardrobePreviewLimit} 件衣物勾选照片。对方可查看、导出已共享的照片，撤回后，已经保存的副本仍由对方持有。</p>
       {items.map((item) => (
-        <label key={item.id} className="check-line">
-          <input type="checkbox" checked={selected.includes(item.id)} disabled={busy || (!selected.includes(item.id) && selected.length >= 8)}
-            onChange={(event) => setSelected(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id))} />
-          共享 {item.data.title}
-        </label>
+        <div key={item.id}>
+          <label className="check-line">
+            <input type="checkbox" checked={selected.includes(item.id)} disabled={busy || (!selected.includes(item.id) && selected.length >= 8)}
+              onChange={(event) => {
+                setSelected(event.target.checked ? [...selected, item.id] : selected.filter((id) => id !== item.id));
+                if (!event.target.checked) setPreviewIds(previewIds.filter((id) => id !== item.id));
+              }} />
+            共享 {item.data.title}
+          </label>
+          {service.supportsManagedPhotos && selected.includes(item.id) && item.data.photos?.[0]?.fileId && (
+            <label className="check-line">
+              <input type="checkbox" checked={previewIds.includes(item.id)}
+                disabled={busy || (!previewIds.includes(item.id) && previewIds.length >= wardrobePreviewLimit)}
+                onChange={(event) => setPreviewIds(event.target.checked ? [...previewIds, item.id] : previewIds.filter((id) => id !== item.id))} />
+              同时共享 {item.data.title} 的照片
+            </label>
+          )}
+        </div>
       ))}
       <label className="field"><span>天气备注（可留空）</span><input value={weather} disabled={busy}
         onChange={(e) => setWeather([...e.target.value].slice(0, wardrobeWeatherLimit).join(""))} /></label>
@@ -74,7 +89,7 @@ function SuggestionForm({ service, selection, previous, busy, run }: {
 }
 
 export function Wardrobe({ service, busy, run, photo }: {
-  service: UsService; busy: boolean; run: Run; photo: (attachment: Attachment) => ReactNode;
+  service: UsService; busy: boolean; run: Run; photo: (attachment: Attachment, visibility: Visibility) => ReactNode;
 }) {
   const [name, setName] = useState("");
   const [slot, setSlot] = useState<WardrobeSlot>("上装");
@@ -91,6 +106,10 @@ export function Wardrobe({ service, busy, run, photo }: {
   const canWrite = !busy && service.space?.status === "active";
   const preview = (incoming?.data.wardrobeSuggestion?.selected ?? []).flatMap((id) =>
     shared?.items.find((item) => item.id === id) ?? []);
+  const sharedPhotos = (theirs?.data.wardrobeSelection?.items ?? []).flatMap(({ id, name, slot, photoId }) => {
+    const attachment = theirs?.data.photos?.find(({ id }) => id === photoId);
+    return attachment ? [{ id, name, slot, attachment }] : [];
+  });
   return (
     <div className="card wardrobe-panel">
       <h2>今天穿什么</h2>
@@ -118,11 +137,11 @@ export function Wardrobe({ service, busy, run, photo }: {
           <button className="secondary" disabled={!canWrite || items.length >= 24}>添加私人衣物</button>
         </form>
         <ul>{items.map((item) => {
-          const isShared = !!(mine && shared?.items.some(({ id }) => id === visibleItemId(mine.id, item.id)));
+          const publicItem = mine && shared?.items.find(({ id }) => id === visibleItemId(mine.id, item.id));
           return <li key={item.id}>
-            {item.data.title} · {item.data.category}{isShared ? " · 已共享名称" : ""}
-            {item.data.photos?.[0] && photo(item.data.photos[0])}
-            {!isShared && <button type="button" className="text-button" disabled={!canWrite}
+            {item.data.title} · {item.data.category}{publicItem && (publicItem.photoId ? " · 已共享名称和照片" : " · 已共享名称")}
+            {item.data.photos?.[0] && photo(item.data.photos[0], "private")}
+            {!publicItem && <button type="button" className="text-button" disabled={!canWrite}
               onClick={() => void run(() => service.trash(item), "已移至回收站")}>移除衣物</button>}
           </li>;
         })}</ul>
@@ -144,6 +163,12 @@ export function Wardrobe({ service, busy, run, photo }: {
         <h3>对方共享的衣物</h3>
         {theirs?.data.wardrobeSelection?.items.length ? <>
           {theirs.data.wardrobeSelection.weather && <p>天气备注：{theirs.data.wardrobeSelection.weather}</p>}
+          {!!sharedPhotos.length && <ul aria-label="已共享的衣物照片">
+            {sharedPhotos.map(({ id, name, slot, attachment }) => <li key={id}>
+              {slot} · {name}
+              {photo(attachment, "shared")}
+            </li>)}
+          </ul>}
           <SuggestionForm key={`${theirs.id}:${theirs.data.wardrobeSelection.edition}:${outgoing?.revision ?? 0}`}
             service={service} selection={theirs} previous={outgoing} busy={!canWrite} run={run} />
         </> : <p>{partner ? "对方还没有共享衣物。" : "双方加入后即可共享搭配。"}</p>}
