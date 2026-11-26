@@ -14,6 +14,7 @@ export async function prepareRecordWrite(
   if (!data.title.trim()) throw new AppError("TITLE_REQUIRED", "写个小标题吧");
   dayNumber(data.date);
   if (data.kind === "capsule") dayNumber(data.unlockDate || "");
+  if (data.kind === "wish" && data.wishTargetDate) dayNumber(data.wishTargetDate);
   if (existing && data.kind === "memory" && (data.title !== existing.data.title || data.body !== existing.data.body)) {
     data = {
       ...data,
@@ -24,7 +25,8 @@ export async function prepareRecordWrite(
   }
   const now = Date.now();
   const ownerOnly = existing?.ownerOnly || (!existing && scope === "shared" &&
-    (data.kind === "wardrobe-share" || data.kind === "wardrobe-suggestion"));
+    (data.kind === "wardrobe-share" || data.kind === "wardrobe-suggestion" || data.kind === "play-media"));
+  const playMediaRoomId = existing?.playMediaRoomId ?? (data.kind === "play-media" ? data.playMediaRoomId : undefined);
   const meta = {
     id: existing?.id || fixedId || (await randomId(rng)),
     spaceId: secrets.spaceId,
@@ -34,6 +36,7 @@ export async function prepareRecordWrite(
     createdAt: existing?.createdAt || now,
     updatedAt: now,
     ...(ownerOnly ? { ownerOnly: true as const } : {}),
+    ...(playMediaRoomId ? { playMediaRoomId } : {}),
   };
   const record = await encryptRecord(meta, data, secrets, rng, keyVersion);
   const photoRefs = [...new Set((data.photos ?? []).flatMap((photo) => photo.fileId ? [photo.fileId] : []))];

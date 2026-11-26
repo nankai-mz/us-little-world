@@ -22,12 +22,17 @@ if (!snapshot || !reference || !output || extra.length) {
 }
 
 function history(db) {
-  if (db.prepare("PRAGMA user_version").get()?.user_version !== 2)
-    throw new Error("恢复需要包含沿袭标记的 Web v2 数据库。旧快照只能离线核对。");
+  if (![2, 3].includes(db.prepare("PRAGMA user_version").get()?.user_version))
+    throw new Error("恢复需要包含沿袭标记的 Web v2 或 v3 数据库。旧快照只能离线核对。");
   const value = db.prepare("SELECT lineage, generation FROM web_history WHERE slot = 1").get();
   if (!value || !/^[a-f0-9]{64}$/.test(value.lineage) || !Number.isSafeInteger(value.generation))
     throw new Error("数据库沿袭标记无效。");
   return value;
+}
+
+function roomExpiry(room) {
+  const votes = room.cleanupVotes;
+  return room.status === "completed" || (votes?.includes(0) && votes?.includes(1)) ? room.expiresAt ?? null : null;
 }
 
 function reconcile(candidate, authority) {
@@ -41,9 +46,11 @@ function reconcile(candidate, authority) {
   const drop = candidate.prepare("DELETE FROM documents WHERE collection = ? AND id = ?");
   const put = candidate.prepare("INSERT OR REPLACE INTO documents (collection, id, data) VALUES (?, ?, ?)");
   const dropPhoto = candidate.prepare("DELETE FROM photos WHERE path = ?");
+  const refPhoto = authority.prepare("SELECT data FROM photos WHERE path = ?");
+  const putPhoto = candidate.prepare("INSERT OR REPLACE INTO photos (path, data) VALUES (?, ?)");
   const read = (collection, id) => JSON.parse(ref.get(collection, id)?.data ?? "null");
   const store = (collection, row) => put.run(collection, row.id, JSON.stringify(row));
-  const count = { closedSpaces: 0, revokedDevices: 0, removedRecords: 0, removedPhotos: 0, updatedTrash: 0 };
+  const count = { closedSpaces: 0, revokedDevices: 0, removedRecords: 0, removedPhotos: 0, updatedTrash: 0, reconciledWorkMedia: 0 };
   const surviving = new Map();
   candidate.exec("BEGIN IMMEDIATE");
   for (const row of rows.all("spaces")) {
@@ -135,6 +142,76 @@ function reconcile(candidate, authority) {
       const { spaceId } = JSON.parse(row.data);
       if (spaceId && !surviving.has(spaceId)) drop.run(collection, row.id);
     }
+  }
+  const keptRooms = new Set();
+  for (const row of rows.all("play_rooms")) {
+    const previous = JSON.parse(row.data);
+    const current = read("play_rooms", row.id);
+    const expiresAt = current && roomExpiry(current);
+    if (!surviving.has(previous.spaceId) || !current || current.spaceId !== previous.spaceId ||
+      (expiresAt !== null && expiresAt <= Date.now())) {
+      drop.run("play_rooms", row.id);
+      continue;
+    }
+    keptRooms.add(row.id);
+    const reconciled = { ...previous, id: row.id, expiresAt, cleanupVotes: current.cleanupVotes };
+    if (previous.revision !== current.revision) {
+      reconciled.finish = [];
+      reconciled.archive = undefined;
+      reconciled.revision = Math.max(previous.revision, current.revision) + 1;
+      if (current.status === "completed") reconciled.status = "completed";
+    }
+    store("play_rooms", reconciled);
+  }
+  for (const collection of ["play_ops", "play_receipts", "play_checkpoints", "play_checkpoint_proposals"]) {
+    for (const row of rows.all(collection)) {
+      if (!keptRooms.has(row.id.split(":", 1)[0])) drop.run(collection, row.id);
+    }
+  }
+  const keptWorks = new Map();
+  for (const row of rows.all("play_works")) {
+    const previous = JSON.parse(row.data);
+    const current = read("play_works", row.id);
+    if (!surviving.get(previous.spaceId)?.members.includes(previous.authorId) || !current ||
+      current.spaceId !== previous.spaceId || current.visibility !== previous.visibility || current.authorId !== previous.authorId) {
+      drop.run("play_works", row.id);
+      continue;
+    }
+    keptWorks.set(row.id, current.spaceId);
+    // Revision is authenticated by the work envelope. Keep the latest authoritative head and its version history.
+    store("play_works", { ...current, id: row.id });
+  }
+  candidate.exec("DELETE FROM documents WHERE collection IN ('play_work_versions', 'play_deleted', 'play_work_media')");
+  for (const row of refRows.all("play_work_versions")) {
+    if (keptWorks.has(row.id.split(":", 1)[0])) put.run("play_work_versions", row.id, row.data);
+  }
+  const reconciledMedia = new Map();
+  for (const row of refRows.all("play_work_media")) {
+    const { workId, spaceId } = JSON.parse(row.data);
+    if (!spaceId || keptWorks.get(workId) !== spaceId) continue;
+    const [recordId, target] = row.id.split(":");
+    if (target !== workId) continue;
+    if (!reconciledMedia.has(recordId)) {
+      // Work heads and versions use the reference database, so their live activity photos must come from that same point.
+      const record = read("encrypted_records", recordId);
+      const fileId = record?.photoRefs?.[0];
+      const file = fileId && read("encrypted_files", fileId);
+      const eligible = record?.spaceId === spaceId && record.playMediaRoomId && record.ownerOnly &&
+        record.visibility === "shared" && !record.deletedAt && !read("record_tombstones", recordId) &&
+        record.photoRefs.length === 1 && file?.spaceId === spaceId && file.recordId === recordId &&
+        file.visibility === "shared" && !file.staging && typeof file.storageId === "string";
+      const photo = eligible && refPhoto.get(file.storageId);
+      if (!photo) continue;
+      store("encrypted_records", { ...record, id: recordId });
+      store("encrypted_files", { ...file, id: fileId });
+      putPhoto.run(file.storageId, photo.data);
+      reconciledMedia.set(recordId, spaceId);
+      count.reconciledWorkMedia++;
+    }
+    if (reconciledMedia.get(recordId) === spaceId) put.run("play_work_media", row.id, row.data);
+  }
+  for (const row of refRows.all("play_deleted")) {
+    if (surviving.has(JSON.parse(row.data).spaceId)) put.run("play_deleted", row.id, row.data);
   }
   candidate.prepare("UPDATE web_history SET generation = ? WHERE slot = 1").run(to.generation + 1);
   candidate.exec("COMMIT");

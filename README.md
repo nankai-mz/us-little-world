@@ -2,6 +2,8 @@
 
 两位成员专用的私密 Web 手账，使用 React、TypeScript、Node.js 和 SQLite。浏览器本机预览可体验示例和单人加密空间。开发顺序、架构和验收条件见 [Web 产品设计与开发计划书](docs/US_WEB_DESIGN_AND_IMPLEMENTATION_PLAN.md)。
 
+双人游乐园包含游戏、创造工坊、共建世界和加密作品馆。隔离环境开关、验证命令和 SQLite 升级见 [双人游戏与共创系统](docs/PLAYGROUND_IMPLEMENTATION_STATUS.md)。
+
 微信小程序的历史版本、配置和验证记录见 [实现状态](docs/STATUS.md) 和 [微信提审准备记录](docs/WECHAT-SUBMISSION-20261103.md)。
 
 ## 马上查看

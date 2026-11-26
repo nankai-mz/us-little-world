@@ -65,7 +65,8 @@ import { OutboxPanel } from "./OutboxPanel";
 import { useCalendarDay } from "./useCalendarDay";
 import { ArchiveExport, RestoreForm } from "./BackupForms";
 import { Modal } from "./Modal";
-import { pairingRoute, parseWebRoute, recordRoute, webRoute, type WebPage, type WebRoute } from "./routes";
+import { pairingRoute, parseWebRoute, playRoute, recordRoute, webRoute, type PlayTarget, type WebPage, type WebRoute } from "./routes";
+import { playIdPattern } from "../src/features/play-core/protocol";
 import {
   allowsUnlockMemory,
   deleteExpiredUnlock,
@@ -104,6 +105,8 @@ import {
 
 const PlansPage = lazy(() => import("./PlansPage").then(({ PlansPage }) => ({ default: PlansPage })));
 const QuestionRoom = lazy(() => import("./QuestionRoom").then(({ QuestionRoom }) => ({ default: QuestionRoom })));
+const Playground = lazy(() => import("./features/playground/Playground").then(({ Playground }) => ({ default: Playground })));
+const GalaxyWorks = lazy(() => import("./features/playground/GalaxyWorks").then(({ GalaxyWorks }) => ({ default: GalaxyWorks })));
 const MealDecision = lazy(() => import("./MealDecision").then(({ MealDecision }) => ({ default: MealDecision })));
 const MealNotebook = lazy(() => import("./MealDecision").then(({ MealNotebook }) => ({ default: MealNotebook })));
 const Wardrobe = lazy(() => import("./Wardrobe").then(({ Wardrobe }) => ({ default: Wardrobe })));
@@ -730,7 +733,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
     close();
   }, [target, activeModal, closeRecordRoute, close]);
   function openRecordRoute(next: WebRoute) {
-    const state = { usRecordBackground: route.record ? window.history.state?.usRecordBackground : webRoute(page, section).pathname,
+    const state = { usRecordBackground: route.record ? window.history.state?.usRecordBackground : route.pathname,
       usPhotoPage: next.record?.kind === "new" && !!next.record.photo };
     if (route.record) window.history.replaceState(state, "", next.pathname);
     else window.history.pushState(state, "", next.pathname);
@@ -756,6 +759,13 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
     }
     setRoute(next);
   }
+  function visitPlay(target?: PlayTarget) {
+    const next = target ? playRoute(target) : webRoute("interaction");
+    if (window.location.pathname !== next.pathname) window.history.pushState(null, "", next.pathname);
+    close();
+    setRoute(next);
+    window.scrollTo(0, 0);
+  }
   function setSection(nextSection: string) {
     navigate(page, nextSection);
   }
@@ -772,7 +782,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
     setEditorTitle(title);
     setLocalPhotoPage(photo);
     if (hostedService && kind === "memory" && (!entry || /^[a-f0-9]{32,64}$/.test(entry.id))) {
-      openRecordRoute(recordRoute(entry ? { kind: "edit", id: entry.id } : { kind: "new", photo }, webRoute(page, section)));
+      openRecordRoute(recordRoute(entry ? { kind: "edit", id: entry.id } : { kind: "new", photo }, route));
       return;
     }
     setEditing(entry);
@@ -785,7 +795,7 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
   }
   const viewEntry = (e: Entry) => {
     if (hostedService && e.data.kind === "memory" && /^[a-f0-9]{32,64}$/.test(e.id)) {
-      openRecordRoute(recordRoute({ kind: "detail", id: e.id }, webRoute(page, section)));
+      openRecordRoute(recordRoute({ kind: "detail", id: e.id }, route));
       return;
     }
     setDetail(e);
@@ -1606,9 +1616,12 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                   {section === "timeline" ? (
                     <MemoryPages key={`timeline:${memoryFilters}`} label="回忆时间轴" items={filteredMemories} render={showMemories} />
                   ) : section === "galaxy" ? (
-                    <MemoryGalaxy entries={filteredMemories} allEntries={memories} service={service}
-                      state={galaxy} setState={setGalaxy} scrollPosition={galaxyScroll.current}
-                      reduceMotion={reduceMotion} openMemory={viewEntry} />
+                    <>
+                      <MemoryGalaxy entries={filteredMemories} allEntries={memories} service={service}
+                        state={galaxy} setState={setGalaxy} scrollPosition={galaxyScroll.current}
+                        reduceMotion={reduceMotion} openMemory={viewEntry} />
+                      {hosted && <Suspense fallback={null}><GalaxyWorks service={service} navigate={visitPlay} /></Suspense>}
+                    </>
                   ) : (
                     <MemoryPages key={`album:${memoryFilters}`} label="回忆相册"
                       items={filteredMemories.flatMap((e) => (e.data.photos ?? []).map((p) => ({ e, p })))}
@@ -2064,7 +2077,8 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
               {section === "wardrobe" && hosted && <Wardrobe service={service} busy={busy} run={run}
                 photo={(attachment, visibility) => <Photo photo={attachment} visibility={visibility} service={service} />} />}
               {section === "games" && (
-                <>
+                (() => {
+                const routines = <>
                   <div className="activity-spread">
                     <button className="activity-meal" onClick={() => setSection("food")}><Utensils size={24}/><strong>今天吃什么？</strong>
                       <span>{hosted ? "选一道两个人都想吃的菜" : "给今天这顿饭留张小票"} <ArrowRight size={16}/></span></button>
@@ -2136,7 +2150,11 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
                       </button>
                     ))}
                   </div>
-                </>
+                </>;
+                return hosted ? <Suspense fallback={route.play ? <p>正在打开双人游乐园…</p> : routines}>
+                  <Playground service={service} target={route.play} fallback={routines} navigate={visitPlay} openMemory={viewEntry} reduceMotion={reduceMotion} />
+                </Suspense> : routines;
+                })()
               )}
               {section === "pet" && (
                 <div className="pet-page">
@@ -2720,6 +2738,8 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
           wide
         >
           {detail.data.kind !== "memory" && <RecordPaper data={detail.data} reveal/>}
+          {hosted && detail.data.playWorkId && playIdPattern.test(detail.data.playWorkId) &&
+            <button onClick={() => visitPlay({ kind: "work", id: detail.data.playWorkId! })}>打开关联作品</button>}
           {receiptOf(detail.data) && <div className="receipt-detail">
             <MealSlip receipt={receiptOf(detail.data)!} date={detail.data.date} names={service.displayNames} userId={service.userId}/>
             {detail.visibility === "shared" && <div className="stamp-choices" aria-label="为这顿饭盖章">
@@ -3202,9 +3222,14 @@ export function App({ hosted }: { hosted?: { account: string; service: UsService
             </p>
             <h3>关于地图和 AI</h3>
             <p>
-              这里不追踪位置、不记录在线状态。打开外部地图会把所选地点坐标交给地图服务。AI
+              Us 不追踪位置或记录在线时长。打开外部地图会把所选地点坐标交给地图服务。AI
               请求必须先选择、预览并单次确认；服务商的数据保留规则由所配置服务决定。
             </p>
+            {hosted && <>
+              <h3>关于双人游乐园</h3>
+              <p>实时房间会向同房的伙伴显示你是否在房间。笔迹、故事和作品在设备上加密，服务器保留房间进度、操作时间及密文大小等同步所需的信息。</p>
+              <p>收藏时可以选择仅自己查看或让两位成员查看。浏览器清除站点数据会移除本机待同步的笔迹。导出的文件可直接查看，请确认保存位置。</p>
+            </>}
             <h3>关于设备和退出空间</h3>
             <p>
               撤销设备只能阻止后续云端访问，不能撤回已经解密的内容。双人空间须双方确认后才解除绑定并进入七天只读冷静期，到期清理双方共同及私人云端密文。请提前导出备份。

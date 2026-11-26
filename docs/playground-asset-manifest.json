@@ -1,0 +1,78 @@
+{
+  "format": 2,
+  "assets": [
+    {
+      "id": "playground-controls-and-worlds",
+      "version": "1",
+      "sources": ["web/features/playground/playground.css"],
+      "license": "项目内原创",
+      "selfMade": true,
+      "dimensions": null,
+      "transparent": null,
+      "adaptation": "响应式布局，支持减少动效",
+      "origin": "项目原创 CSS",
+      "content": "棋盘、拼图、房间、厨房、迷宫、星际镜头、等距星球地块与二维网格、作品馆"
+    },
+    {
+      "id": "playground-levels",
+      "version": "1",
+      "sources": ["src/features/scene-core/level-campaign.json"],
+      "license": "项目内原创",
+      "selfMade": true,
+      "dimensions": null,
+      "transparent": null,
+      "adaptation": "运行时格网缩放",
+      "origin": "项目原创关卡与线索",
+      "content": "三间密室、十关光影迷宫和九关星际探险"
+    },
+    {
+      "id": "playground-scene-items",
+      "version": "1",
+      "sources": ["src/features/scene-core/levels.ts"],
+      "license": "项目内原创布局",
+      "selfMade": true,
+      "dimensions": null,
+      "transparent": null,
+      "adaptation": "二维网格与全图缩略",
+      "origin": "项目原创布局与物件设计",
+      "content": "两张厨房图、家具、花种、宇航服装饰和星球道具"
+    },
+    {
+      "id": "playground-drawing",
+      "version": "1",
+      "sources": ["web/features/playground/CanvasBoard.tsx", "web/features/playground/visualExport.ts"],
+      "license": "项目内原创渲染",
+      "selfMade": true,
+      "dimensions": null,
+      "transparent": null,
+      "adaptation": "视口适配与低分辨率模式",
+      "origin": "本地 Canvas 渲染",
+      "content": "笔迹、几何形状、便签、照片、漫画输出与作品画格封面"
+    },
+    {
+      "id": "playground-symbols",
+      "version": "1",
+      "sources": ["src/features/play-core/catalog.ts", "src/features/puzzle-core/grid.ts", "src/features/canvas-core/canvas.ts", "src/features/scene-core/levels.ts"],
+      "license": "系统字形按设备提供",
+      "selfMade": false,
+      "dimensions": null,
+      "transparent": null,
+      "adaptation": "使用操作系统的字形与替代字体",
+      "origin": "Unicode 字符表，发布包不内嵌字体",
+      "content": "小游戏、装饰物和贴纸符号"
+    },
+    {
+      "id": "playground-lucide-icons",
+      "version": "0.468.0",
+      "sources": ["node_modules/lucide-react/package.json", "node_modules/lucide-react/LICENSE"],
+      "license": "ISC",
+      "selfMade": false,
+      "dimensions": { "width": 24, "height": 24 },
+      "transparent": true,
+      "adaptation": "矢量图标随界面缩放",
+      "origin": "lucide-react，包含 Feather 图标的 MIT 声明",
+      "content": "导航、编辑与状态图标"
+    }
+  ],
+  "privateMedia": "共同照片与创作者上传素材通过现有端到端加密照片管线保存，发布包不含私人媒体。"
+}

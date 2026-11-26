@@ -5,7 +5,7 @@ import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { once } from "node:events";
 import { promisify } from "node:util";
-import { build } from "esbuild";
+import { buildWebServer } from "../scripts/web-server-build.mjs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, it, vi } from "vitest";
@@ -111,8 +111,7 @@ it("网页双账号支持配对、换机、加密照片同步和在线快照恢�
   try {
     await mkdir(join(dir, "dist"));
     await writeFile(join(dir, "dist", "index.html"), "<html><head></head><body></body></html>");
-    await build({ entryPoints: [resolve("src/server/web-entry.ts")], outfile: join(dir, "server.mjs"),
-      bundle: true, platform: "node", format: "esm" });
+    await buildWebServer(join(dir, "server.mjs"));
     await start();
     expect(await (await fetch(origin)).text()).toContain("us-web-hosted");
     for (const pathname of ["/app/home", "/app/album", "/app/play/question", "/app/plans/dates", "/app/settings"]) {

@@ -21,7 +21,13 @@
     "build:web": "vite build",
     "package:web": "npm run build:web && node scripts/package-web.mjs",
     "check:web": "npm run typecheck:web && npm test && npm run build:web",
+    "check:play-assets": "node scripts/play-asset-manifest.mjs",
     "test:web:e2e": "npm run build:web && playwright test",
+    "test:play:unit": "vitest run tests/playground-core.test.ts tests/playground-games.test.ts",
+    "scene:levels": "node scripts/scene-levels.mjs",
+    "test:play:integration": "vitest run tests/playground-store.test.ts",
+    "test:play:e2e": "npm run build:web && playwright test e2e/playground.e2e.ts",
+    "test:play:perf": "vitest run tests/playground-store.test.ts -t 5000 && playwright test e2e/playground-render.e2e.ts",
     "serve:web": "node --env-file-if-exists=.env.web scripts/serve-web.mjs",
     "backup:web": "node scripts/backup-web.mjs",
     "recover:web": "node scripts/recover-web.mjs"
@@ -39,7 +45,8 @@
     "gsap": "3.13.0",
     "lucide-react": "^0.468.0",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "ws": "8.23.0"
   },
   "devDependencies": {
     "@playwright/test": "1.60.0",
@@ -47,6 +54,7 @@
     "@types/node": "^22.10.0",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
+    "@types/ws": "8.18.1",
     "@vitejs/plugin-react": "^4.3.4",
     "esbuild": "^0.25.0",
     "miniprogram-api-typings": "^4.0.0",

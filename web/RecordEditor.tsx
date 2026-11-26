@@ -467,7 +467,11 @@ export function RecordEditor({
           </details>
         </>
       )}
-      {kind === "wish" && (
+      {kind === "wish" && <div className="editor-meta">
+        <Field label="目标日期（选填）">
+          <input type="date" value={form.wishTargetDate ?? ""}
+            onChange={(event) => set({ wishTargetDate: event.target.value || undefined })} />
+        </Field>
         <Field label="这份期待有多特别">
           <select
             value={form.priority || "小小期待"}
@@ -478,7 +482,7 @@ export function RecordEditor({
             <option>慢慢来就好</option>
           </select>
         </Field>
-      )}
+      </div>}
       {kind === "anniversary" && !isRelationship && (
         <label className="check-line">
           <input

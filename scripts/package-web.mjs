@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { build } from "esbuild";
+import { buildWebServer } from "./web-server-build.mjs";
+import { buildPlayAssetManifest } from "./play-asset-manifest.mjs";
 import { zipSync } from "fflate";
 
 const { version } = JSON.parse(await readFile("package.json", "utf8"));
@@ -32,9 +33,19 @@ for (const name of [
   "scripts/backup-web.mjs", "scripts/web-snapshot.mjs", "scripts/recover-web.mjs", "scripts/maintain-web.mjs", "scripts/check-web-origin.mjs",
 ])
   files[name] = await readFile(name);
-files["README.md"] = await readFile("docs/WEB_DEPLOYMENT.md");
-const result = await build({ entryPoints: ["src/server/web-entry.ts"], outfile: "server.mjs", write: false,
-  bundle: true, platform: "node", target: "node22", format: "esm" });
+files["README.md"] = Buffer.from((await readFile("docs/WEB_DEPLOYMENT.md", "utf8"))
+  .replace("(PLAYGROUND_IMPLEMENTATION_STATUS.md)", "(docs/PLAYGROUND_IMPLEMENTATION_STATUS.md)"));
+for (const name of ["PLAYGROUND_IMPLEMENTATION_STATUS.md", "US_TWO_PERSON_PLAY_AND_CREATION_ROADMAP.md"])
+  files["docs/" + name] = await readFile("docs/" + name);
+const { manifest: playAssets, licenseNotices } = await buildPlayAssetManifest();
+const staticAssets = Object.entries(files).filter(([name]) => name.startsWith("dist/assets/"));
+playAssets.release = {
+  staticAssetFiles: staticAssets.length,
+  staticAssetBytes: staticAssets.reduce((total, [, bytes]) => total + bytes.length, 0),
+};
+files["docs/playground-asset-manifest.json"] = Buffer.from(JSON.stringify(playAssets, null, 2) + "\n");
+Object.assign(files, licenseNotices);
+const result = await buildWebServer("server.mjs", false);
 files["server.mjs"] = result.outputFiles[0].contents;
 const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const createdAt = new Date().toISOString();

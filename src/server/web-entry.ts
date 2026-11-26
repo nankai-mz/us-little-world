@@ -9,6 +9,10 @@ import { runMaintenance } from "./lifecycle";
 import { openWebRepository } from "./web-repository";
 import { parseWebRoute } from "../../web/routes";
 import { AppError } from "../core/types";
+import { createPlayApi } from "./activities/api";
+import { collections as playCollections } from "./activities/store";
+import { attachPlayGateway } from "./realtime/gateway";
+import { playIdPattern } from "../features/play-core/protocol";
 
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 const derive = promisify(scrypt);
@@ -62,13 +66,18 @@ function logFailure(operation: string, error: unknown, requestId?: string) {
   }));
 }
 const deps = { ...files, runtime: { mode: "cloud" } as const, recordReceipts: true, managedPhotos: true, webDeviceChallenges: true,
+  playCollections: Object.values(playCollections),
+  playMediaEnabled: ["playground", "shared_canvas"].every((stage) =>
+    (process.env.US_WEB_PLAYGROUND ?? "").split(",").some((item) => item.trim() === stage)),
   now: Date.now, hash, id: () => randomBytes(16).toString("hex"), checkPhotoCapacity,
   onInternalError: (error: unknown) => logFailure("space-api", error) };
 const api = createApi(deps);
+const play = createPlayApi(files.playRepository, process.env.US_WEB_PLAYGROUND ?? "", Date.now, hash,
+  (error) => logFailure("play-api", error));
 let maintenanceRun: Promise<unknown> | undefined;
 function maintain() {
   if (maintenanceRun) return;
-  maintenanceRun = runMaintenance(deps).catch((error) => logFailure("maintenance", error)).finally(() => {
+  maintenanceRun = runMaintenance(deps).then(() => play.prune()).catch((error) => logFailure("maintenance", error)).finally(() => {
     maintenanceRun = undefined;
   });
 }
@@ -183,7 +192,8 @@ const server = createServer({ requestTimeout: 30000, headersTimeout: 10000 }, as
   response.setHeader("Cache-Control", "no-store");
   response.setHeader("X-Content-Type-Options", "nosniff");
   response.setHeader("Referrer-Policy", "no-referrer");
-  response.setHeader("Content-Security-Policy", "default-src 'self'; connect-src 'self' blob:; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+  const socketSource = play.realtime ? " " + origin.origin.replace(/^http/, "ws") : "";
+  response.setHeader("Content-Security-Policy", `default-src 'self'; connect-src 'self' blob:${socketSource}; img-src 'self' blob: data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`);
   if (origin.protocol === "https:") response.setHeader("Strict-Transport-Security", "max-age=15552000");
   const path = (request.url || "").split("?")[0];
   try {
@@ -384,6 +394,15 @@ const server = createServer({ requestTimeout: 30000, headersTimeout: 10000 }, as
       }
       delete session.authorization;
     }
+    if (action.startsWith("play.") || action.startsWith("works.")) {
+      const reply = await play.call({ accountId: userId, spaceId: binding!.spaceId, deviceId: binding!.deviceId },
+        action, input, () => sessions.get(token) === session && session.expiresAt > Date.now() && session.binding === binding);
+      json(response, 200, reply);
+      if (gateway && reply.success && action.startsWith("play.") &&
+        typeof input.roomId === "string" && playIdPattern.test(input.roomId) && action !== "play.getRoom")
+        void gateway.changed(input.roomId);
+      return;
+    }
     json(response, 200, await api(userId, action, input));
   } catch (error) {
     if (error instanceof SyntaxError || (error instanceof Error && ["BODY_LIMIT", "INVALID_JSON"].includes(error.message))) {
@@ -399,6 +418,16 @@ const server = createServer({ requestTimeout: 30000, headersTimeout: 10000 }, as
     else response.end();
   }
 });
+const gateway = play.realtime ? attachPlayGateway(server, origin.origin, play, (request) => {
+  const token = sessionToken(request);
+  const session = sessions.get(token);
+  const binding = session?.binding;
+  if (!session || !binding) return null;
+  return {
+    actor: { ...binding, accountId: hash(`Us/web/account/${session.account}`) },
+    valid: () => sessions.get(token) === session && session.expiresAt > Date.now() && session.binding === binding,
+  };
+}) : null;
 server.listen(port, "127.0.0.1", () => {
   console.log(`网站已启动 http://127.0.0.1:${port}/`);
   maintain();
@@ -406,6 +435,7 @@ server.listen(port, "127.0.0.1", () => {
 for (const signal of ["SIGINT", "SIGTERM"] as const) {
   process.once(signal, () => {
     clearInterval(maintenance);
+    gateway?.close();
     server.close(() => void Promise.resolve(maintenanceRun).finally(files.close));
     server.closeIdleConnections();
   });

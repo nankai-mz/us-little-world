@@ -131,6 +131,7 @@ export function PlansPage({ section, setSection, entries, day, service, edit, ru
                     <span className="wish-priority">
                       {e.data.priority || "小小期待"}
                     </span>
+                    {e.data.wishTargetDate && <p><CalendarDays size={14} /> 目标 {dateLabel(e.data.wishTargetDate)}</p>}
                     <div className="plan-card-bottom">
                       <button
                         className="text-button"

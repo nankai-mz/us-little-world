@@ -4,13 +4,15 @@ import type { Repository, Tx } from "./api";
 import type { CipherRecord } from "../core/types";
 import { PHOTO_DOWNLOAD_PART_SIZE } from "../core/photos";
 import type { WebSync } from "./web-sync";
+import { migratePlayground } from "./migrations/playground";
+import { sequenceKey, type PlayRepository, type PlayTransaction } from "./activities/store";
 
 export function openWebRepository(filename: string) {
   const db = new DatabaseSync(filename);
   try {
     db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL");
     const version = Number(db.prepare("PRAGMA user_version").get()?.user_version);
-    if (![0, 1, 2].includes(version)) throw new Error("Unsupported Web database version");
+    if (![0, 1, 2, 3].includes(version)) throw new Error("Unsupported Web database version");
     if (version < 2) {
       db.exec(`
       BEGIN IMMEDIATE;
@@ -26,6 +28,7 @@ export function openWebRepository(filename: string) {
       db.prepare("INSERT OR IGNORE INTO web_history VALUES (1, ?, 0)").run(randomBytes(32).toString("hex"));
       db.exec("PRAGMA user_version = 2; COMMIT");
     }
+    migratePlayground(db, version);
     db.exec(`CREATE INDEX IF NOT EXISTS web_record_space ON documents(json_extract(data, '$.spaceId'), id)
       WHERE collection = 'encrypted_records';
       CREATE INDEX IF NOT EXISTS web_record_change_stream
@@ -67,6 +70,46 @@ export function openWebRepository(filename: string) {
       AND json_extract(data, '$.seq') > ?
     ORDER BY json_extract(data, '$.seq') LIMIT ?
   `);
+  const listRooms = db.prepare(`
+    SELECT data FROM documents WHERE collection = 'play_rooms'
+    AND json_extract(data, '$.spaceId') = ? AND id > ?
+    AND (json_extract(data, '$.expiresAt') IS NULL OR json_extract(data, '$.expiresAt') > ?)
+    ORDER BY id LIMIT ?
+  `);
+  const listWorks = db.prepare(`
+    SELECT data FROM documents WHERE collection = 'play_works'
+    AND json_extract(data, '$.spaceId') = ? AND id > ?
+    AND (json_extract(data, '$.visibility') = 'shared' OR json_extract(data, '$.authorId') = ?)
+    ORDER BY id LIMIT ?
+  `);
+  const byResource = db.prepare(`
+    SELECT data FROM documents WHERE collection = ? AND id > ? AND id < ? ORDER BY id LIMIT ?
+  `);
+  const removeResource = db.prepare("DELETE FROM documents WHERE collection = ? AND id > ? AND id < ?");
+  const compactedBytes = db.prepare(`
+    SELECT coalesce(sum(length(json_extract(data, '$.envelope.ciphertext'))), 0) AS bytes
+    FROM documents WHERE collection = 'play_ops' AND id > ? AND id <= ?
+  `);
+  const compact = db.prepare("DELETE FROM documents WHERE collection = 'play_ops' AND id > ? AND id <= ?");
+  const expiredRooms = db.prepare(`
+    SELECT data FROM documents WHERE collection = 'play_rooms'
+    AND json_extract(data, '$.expiresAt') <= ? ORDER BY json_extract(data, '$.expiresAt'), id LIMIT ?
+  `);
+  const clearWorkMedia = db.prepare(`
+    DELETE FROM documents WHERE collection = 'play_work_media' AND json_extract(data, '$.workId') = ?
+  `);
+  const playMediaGarbage = db.prepare(`
+    SELECT record.data FROM documents AS record
+    WHERE record.collection = 'encrypted_records' AND json_extract(record.data, '$.playMediaRoomId') IS NOT NULL
+    AND NOT EXISTS (
+      SELECT 1 FROM documents AS room WHERE room.collection = 'play_rooms' AND room.id = json_extract(record.data, '$.playMediaRoomId')
+    ) AND NOT EXISTS (
+      SELECT 1 FROM documents AS ref JOIN documents AS work
+        ON work.collection = 'play_works' AND work.id = json_extract(ref.data, '$.workId')
+      WHERE ref.collection = 'play_work_media' AND ref.id > record.id || ':' AND ref.id < record.id || ';'
+    )
+    ORDER BY record.id LIMIT ?
+  `);
   const visibleRecords = async (spaceId: string, privateOwner: string | null, after: string, offset: number) =>
     listVisibleRecords.all(spaceId, after, privateOwner, offset).map((row) => JSON.parse(String(row.data)) as CipherRecord);
   const tx = {
@@ -79,6 +122,24 @@ export function openWebRepository(filename: string) {
     async putPhoto(path, data) { writePhoto.run(path, data); return path; },
     async deletePhoto(path) { deletePhoto.run(path); },
   } satisfies Tx;
+  const parse = (rows: { data?: unknown }[]) => rows.map((row) => JSON.parse(String(row.data)));
+  const playTx: PlayTransaction = {
+    ...tx,
+    rooms: (space, after, at, limit) => parse(listRooms.all(space, after, at, limit)),
+    works: (space, after, owner, limit) => parse(listWorks.all(space, after, owner, limit)),
+    page: (collection, resource, after, limit) =>
+      parse(byResource.all(collection, resource + ":" + after, resource + ";", limit)),
+    clear: (collection, resource) => { removeResource.run(collection, resource + ":", resource + ";"); },
+    clearWorkMedia: (workId) => { clearWorkMedia.run(workId); },
+    trimOperations: (resource, through) => {
+      const from = resource + ":", to = from + sequenceKey(through);
+      const bytes = Number(compactedBytes.get(from, to)?.bytes ?? 0);
+      compact.run(from, to);
+      return bytes;
+    },
+    expired: (at, limit) => parse(expiredRooms.all(at, limit)),
+    mediaGarbage: (limit) => parse(playMediaGarbage.all(limit)),
+  };
   let previous: Promise<unknown> = Promise.resolve();
   function serial<T>(operation: () => T | Promise<T>): Promise<T> {
     const next = previous.then(operation);
@@ -116,6 +177,10 @@ export function openWebRepository(filename: string) {
     }),
     transaction,
   };
+  const playRepository: PlayRepository = {
+    read: (query) => serial(() => query(playTx)),
+    write: (query) => transaction(() => query(playTx)),
+  };
   const cursorKey = randomBytes(32);
   const webSync: WebSync = {
     read: (query) => serial(async () => {
@@ -151,6 +216,7 @@ export function openWebRepository(filename: string) {
   return {
     repo,
     webSync,
+    playRepository,
     listVisibleRecords: (spaceId: string, privateOwner: string | null, after: string, offset: number) =>
       serial(() => visibleRecords(spaceId, privateOwner, after, offset)),
     checkReady: () => serial(() => {

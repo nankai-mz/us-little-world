@@ -1,9 +1,7 @@
 import { firefox, webkit, test, expect, type Browser, type Page, type Request } from "@playwright/test";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
-import { signIn, startReleaseFixture } from "./release-fixture";
-
-type VaultBackup = { key: string; file: Buffer };
+import { downloadVault, signIn, startReleaseFixture } from "./release-fixture";
 
 const closeModal = (page: Page) => page.getByRole("dialog").getByRole("button", { name: "关闭", exact: true }).click();
 
@@ -83,26 +81,6 @@ async function checkDiary(page: Page, title: string, filename: string, height: n
     })).toBe(0);
   }
   await closeModal(page);
-}
-
-async function downloadVault(page: Page, origin: string, phrase: string): Promise<VaultBackup> {
-  await page.goto(`${origin}/app/settings`);
-  await page.getByRole("button", { name: /备份与恢复密钥/ }).click();
-  await page.getByLabel("再次输入本机口令").fill(phrase);
-  await page.getByRole("button", { name: "验证并查看恢复密钥" }).click();
-  const code = page.locator(".recovery-code");
-  await expect(code).toHaveText(/^[a-f0-9]{64}$/);
-  const key = await code.innerText();
-  const downloadReady = page.waitForEvent("download");
-  await page.getByRole("button", { name: "保存加密备份文件" }).click();
-  const download = await downloadReady;
-  const file = await readFile(await download.path());
-  const backup = JSON.parse(file.toString("utf8"));
-  expect(backup).toMatchObject({ format: "UsBackup", version: 2 });
-  expect(Object.keys(backup.vault).sort()).toEqual(["recoveryEnvelope", "version"]);
-  await closeModal(page);
-  await expect(page.getByRole("dialog")).toHaveCount(0);
-  return { key, file };
 }
 
 test("Firefox 与 WebKit 双人图文、冷启动离线与互换浏览器恢复", async ({}, info) => {
@@ -363,8 +341,9 @@ test("Firefox 与 WebKit 双人图文、冷启动离线与互换浏览器恢复"
         const revoke = original.getByRole("button", { name: "撤销", exact: true });
         await expect(revoke).toHaveCount(1);
         await revoke.click();
-        await original.getByLabel("重新输入网站密码").fill(accounts[example.account]);
-        await original.getByRole("button", { name: "验证并继续" }).click();
+        const password = original.getByLabel("重新输入网站密码");
+        await password.fill(accounts[example.account]);
+        await password.press("Enter");
         await expect(original.getByRole("status")).toHaveText("该设备的后续云访问已撤销");
       };
       await revokeActiveDevice();

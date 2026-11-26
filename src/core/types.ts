@@ -18,6 +18,7 @@ export type Kind =
   | "wardrobe-item"
   | "wardrobe-share"
   | "wardrobe-suggestion"
+  | "play-media"
   | "comment"
   | "report";
 export interface Envelope {
@@ -38,6 +39,7 @@ export interface RecordMeta {
   updatedAt: number;
   deletedAt?: number;
   ownerOnly?: true;
+  playMediaRoomId?: string;
 }
 export interface CipherRecord extends RecordMeta {
   envelope: Envelope;
@@ -57,6 +59,8 @@ export interface Payload {
   title: string;
   photoPage?: true;
   replyPhotoId?: string;
+  playWorkId?: string;
+  playMediaRoomId?: string;
   mealReceipt?: { meal: string; dish: string; stamps?: Record<string, "again" | "other"> };
   body?: string;
   date: string;
@@ -74,6 +78,7 @@ export interface Payload {
   latitude?: number;
   longitude?: number;
   completedAt?: string;
+  wishTargetDate?: string;
   priority?: string;
   budget?: string;
   location?: string;

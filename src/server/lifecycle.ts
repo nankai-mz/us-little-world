@@ -102,6 +102,7 @@ export async function runMaintenance(
       ...(deps.recordReceipts ? [RECORD_RECEIPTS, RECORD_TOMBSTONES] : []),
       ...(deps.webDeviceChallenges ? [webRecoveryKeys, webProfiles] : []),
       ...(deps.webSync ? [recordStreams, recordChanges] : []),
+      ...(deps.playCollections ?? []),
     ]) {
       while (remaining > 0) {
         const rows = await repo.list(

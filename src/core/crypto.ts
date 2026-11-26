@@ -27,7 +27,7 @@ export const browserRandom: RandomSource = async (n) =>
   crypto.getRandomValues(new Uint8Array(n));
 export const randomId = async (rng: RandomSource) => toHex(await rng(16));
 export function context(
-  meta: Pick<RecordMeta, "id" | "spaceId" | "creatorId" | "visibility" | "ownerOnly">,
+  meta: Pick<RecordMeta, "id" | "spaceId" | "creatorId" | "visibility" | "ownerOnly" | "playMediaRoomId">,
   keyVersion: number,
 ) {
   return JSON.stringify([
@@ -40,6 +40,7 @@ export function context(
     meta.visibility,
     keyVersion,
     ...(meta.ownerOnly ? ["owner-only"] : []),
+    ...(meta.playMediaRoomId ? ["play-media", meta.playMediaRoomId] : []),
   ]);
 }
 function keyFor(master: Uint8Array, aad: string) {

@@ -1,9 +1,10 @@
 import { execFile } from "node:child_process";
-import { createHash, X509Certificate } from "node:crypto";
+import { createHash, randomInt, X509Certificate } from "node:crypto";
 import { once } from "node:events";
 import { readFile } from "node:fs/promises";
 import { request } from "node:http";
 import { createServer } from "node:https";
+import { connect, type Socket } from "node:net";
 import { join } from "node:path";
 import { promisify } from "node:util";
 
@@ -37,6 +38,7 @@ export async function startHttpsFixture(directory: string, upstreamPort: number)
   let workerUpdate = false;
   let reachable = true;
   let unavailable = false;
+  const upgrades = new Set<Socket>();
   const server = createServer(credentials, (incoming, outgoing) => {
     // Dropping the socket makes every request fail for real, including requests the
     // service worker makes on behalf of an offline page. Engine network emulation is
@@ -63,16 +65,45 @@ export async function startHttpsFixture(directory: string, upstreamPort: number)
     outgoing.on("close", () => upstream.destroy());
     incoming.pipe(upstream);
   });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
+  server.on("upgrade", (incoming, downstream, head) => {
+    if (!reachable || unavailable || !incoming.url?.startsWith("/ws/play?room=")) { downstream.destroy(); return; }
+    const upstream = connect(upstreamPort, "127.0.0.1", () => {
+      const headers = incoming.rawHeaders.flatMap((line, index, list) =>
+        index % 2 === 0 ? [line + ": " + list[index + 1]] : []);
+      upstream.write([incoming.method + " " + incoming.url + " HTTP/1.1", ...headers, "", ""].join("\r\n"));
+      if (head.length) upstream.write(head);
+      downstream.pipe(upstream).pipe(downstream);
+    });
+    upgrades.add(upstream);
+    upstream.once("close", () => { upgrades.delete(upstream); downstream.destroy(); });
+    downstream.once("close", () => upstream.destroy());
+    upstream.on("error", () => downstream.destroy());
+    downstream.on("error", () => upstream.destroy());
+  });
+  // Some hosts allocate low ephemeral ports that browsers reserve for other protocols.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      server.listen(randomInt(49152, 65536), "127.0.0.1");
+      await once(server, "listening");
+      break;
+    } catch (error) {
+      if (attempt >= 15 || !["EADDRINUSE", "EACCES"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+    }
+  }
   const { port } = server.address() as { port: number };
   return {
     origin: `https://127.0.0.1:${port}`,
     certificatePin,
     certificate: credentials.cert,
     publishWorkerUpdate: () => { workerUpdate = true; },
-    setNetworkAvailable: (value: boolean) => { reachable = value; },
+    setNetworkAvailable: (value: boolean) => {
+      reachable = value;
+      if (!value) for (const socket of upgrades) socket.destroy();
+    },
     setUpstreamUnavailable: (value: boolean) => { unavailable = value; },
-    close: () => new Promise<void>((done) => server.close(() => done())),
+    close: () => new Promise<void>((done) => {
+      for (const socket of upgrades) socket.destroy();
+      server.close(() => done());
+    }),
   };
 }

@@ -40,7 +40,7 @@ export async function createArchive(
   await service.refresh();
   checkActive();
   const scoped = service.active.filter(({ visibility, data }) =>
-    (scope.visibility === "all" || visibility === scope.visibility) &&
+    data.kind !== "play-media" && (scope.visibility === "all" || visibility === scope.visibility) &&
     (visibility === "shared" || service.hasPrivateAccess) &&
     (!scope.from || data.date >= scope.from) && (!scope.to || data.date <= scope.to),
   );

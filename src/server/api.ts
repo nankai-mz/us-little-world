@@ -65,6 +65,8 @@ export interface ServerDeps {
     spaceId: string, privateOwner: string | null, after: string, offset: number,
   ) => Promise<CipherRecord[]>;
   webSync?: WebSync;
+  playCollections?: readonly string[];
+  playMediaEnabled?: boolean;
 }
 type RecordChange = RecordMeta | { id: string; visibility: RecordMeta["visibility"]; deleted: true; deletedFileIds?: string[] };
 type RecordReceipt = { action: string; digest: string; result: RecordChange; expiresAt: number };
@@ -148,7 +150,7 @@ async function member(
   );
   return s;
 }
-async function authorizedDevice(
+export async function authorizedDevice(
   tx: Tx,
   deviceId: unknown,
   userId: string,
@@ -719,6 +721,7 @@ export function createApi(deps: ServerDeps) {
           const envelope = validateEnvelope(incoming.envelope);
           const refs = photoReferences(input.photoRefs);
           const ownerOnly = incoming.ownerOnly === true;
+          const playMediaRoomId = incoming.playMediaRoomId === undefined ? undefined : id(incoming.playMediaRoomId);
           ensure(
             ["shared", "private"].includes(incoming.visibility) && (!ownerOnly || incoming.visibility === "shared"),
             "INVALID_REQUEST",
@@ -726,7 +729,7 @@ export function createApi(deps: ServerDeps) {
           );
           result = await changeRecord(spaceId, userId, input.deviceId, action, input.operationId,
             [recordId, incoming.creatorId, incoming.visibility, envelope, input.expectedRevision, refs,
-              ...(ownerOnly ? [true] : [])], async (tx, currentSpace, currentDevice) => {
+              ...(ownerOnly ? [true] : []), ...(playMediaRoomId ? ["play-media", playMediaRoomId] : [])], async (tx, currentSpace, currentDevice) => {
             requireDeviceVisibility(currentDevice, incoming.visibility);
             ensure(
               envelope.keyVersion === currentSpace.keyVersion,
@@ -737,6 +740,13 @@ export function createApi(deps: ServerDeps) {
               "encrypted_records",
               recordId,
             );
+            if (playMediaRoomId) {
+              const room = deps.playMediaEnabled && await tx.get("play_rooms", playMediaRoomId);
+              ensure(room && room.spaceId === spaceId && room.status === "active" && room.keyVersion === currentSpace.keyVersion &&
+                room.memberIds.includes(userId) && (!room.expiresAt || room.expiresAt > now()) &&
+                incoming.visibility === "shared" && ownerOnly && refs?.length === 1,
+              "ROOM_UNAVAILABLE", "此活动无法接收照片素材");
+            }
             if (!current && deps.recordReceipts) {
               const tombstone = await tx.get(RECORD_TOMBSTONES, recordId);
               ensure(!tombstone, "RECORD_PURGED", "这条记录已永久删除，不能重复提交原保存");
@@ -750,7 +760,8 @@ export function createApi(deps: ServerDeps) {
               "无法编辑这条记录",
             );
             ensure(
-              !current || (current.visibility === incoming.visibility && !!current.ownerOnly === ownerOnly),
+              !current || (current.visibility === incoming.visibility && !!current.ownerOnly === ownerOnly &&
+                current.playMediaRoomId === playMediaRoomId),
               "INVALID_REQUEST",
               "请另存一条记录以改变可见范围",
             );
@@ -774,6 +785,7 @@ export function createApi(deps: ServerDeps) {
               createdAt: current?.createdAt || now(),
               updatedAt: now(),
               ...(ownerOnly ? { ownerOnly: true } : {}),
+              ...(playMediaRoomId ? { playMediaRoomId } : {}),
               ...(current?.deletedAt ? { deletedAt: current.deletedAt } : {}),
               ...(refs !== undefined ? { photoRefs: refs } : current?.photoRefs ? { photoRefs: current.photoRefs } : {}),
             };
